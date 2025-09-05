@@ -73,7 +73,24 @@ with st.sidebar:
 
     duration_cols = []
     round_mode = st.selectbox(
-        "Rounding (applies to duration-based CT)",
+        "Rounding (applies to duration-based CT)
+
+    # Optional bucketing date column for Auto mode (in case rows have only durations)
+    bucket_date_col_auto = "(none)"
+    if ct_source.startswith("Auto"):
+        bucket_candidates_auto = ["(none)"] + cols
+        default_bucket_idx_auto = 0
+        if "Finished" in cols:
+            default_bucket_idx_auto = cols.index("Finished") + 1
+        elif "Started" in cols:
+            default_bucket_idx_auto = cols.index("Started") + 1
+        bucket_date_col_auto = st.selectbox(
+            "Auto mode — date column for bucketing charts (optional)",
+            options=bucket_candidates_auto,
+            index=default_bucket_idx_auto,
+            help="If your Started/Finished are durations (no real dates), pick another date column to place items on the timeline."
+        )
+",
         options=["None", "Ceil to hours", "Ceil to days"],
         index=2,
         help="When CT is computed from durations, choose rounding. 'Ceil to days' produces whole-day integers."
@@ -458,11 +475,13 @@ with tabs[0]:
 # ---------- CYCLE TIME ----------
 with tabs[1]:
     st.subheader("Cycle Time" + ("" if selected_team == "All Teams" else f" — {selected_team}"))
-    if not roll_sel.empty:
+    if not roll_sel.empty and roll_sel["Month"].notna().any():
         base = alt.Chart(roll_sel.dropna(subset=["Month"])).encode(x=alt.X("Month:T", title="Month", sort="ascending"))
         st.altair_chart(base.mark_line(point=True).encode(y=alt.Y("avg:Q", title="Average CT (days)")), use_container_width=True)
         st.altair_chart(base.mark_line(point=True).encode(y=alt.Y("p85:Q", title="85th CT (days)")), use_container_width=True)
         st.altair_chart(base.mark_bar().encode(y=alt.Y("items:Q", title="Item Count")), use_container_width=True)
+    else:
+        st.info("No dated rows to chart for this scope. If you are in **Auto** mode with duration-only rows, pick a bucketing date column in the sidebar.")
 
     st.markdown("**CT Distribution (last 6 months)**")
     base_dt = pd.to_datetime(view_df["_bucketer"], errors="coerce")
