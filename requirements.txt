@@ -1,6 +1,0 @@
-streamlit
-pandas
-numpy
-python-dateutil
-requests
-altair
