@@ -2,14 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-from timepiece_integration import run_timepiece_report, parse_status_rules, build_dataframe
+from timepiece_integration import fetch_status_durations, fetch_transition_dates, parse_status_rules, build_dataframe
 
 st.set_page_config(page_title="Cycle Time Analysis", layout="wide")
 
 # ===================== SIDEBAR: SETTINGS =====================
 with st.sidebar:
     st.title("Cycle Time Analysis (OBSS Timepiece API)")
-    st.caption("Fetch Jira data via OBSS Timepiece")
+    st.caption("Fetch Jira data via OBSS Timepiece Cloud")
 
     api_key = st.text_input("Timepiece tisjwt Token", type="password")
     jql_query = st.text_area(
@@ -22,8 +22,8 @@ with st.sidebar:
     st.markdown("### API Endpoint")
     base_url = st.text_input(
         "Timepiece API base URL",
-        value="https://cdssystems.atlassian.net/rest/com.obss.plugin.time-in-status/1.0/report/export",
-        help="Base export endpoint for OBSS Timepiece"
+        value="https://tis.obss.io/rest/list-v2",
+        help="OBSS Cloud endpoint"
     )
 
     st.markdown("### Status Buckets")
@@ -41,8 +41,8 @@ if not fetch_button or not api_key or not jql_query:
 # ===================== FETCH DATA FROM TIMEPIECE =====================
 with st.spinner("Fetching reports from Timepiece..."):
     try:
-        duration_data = run_timepiece_report(api_key, base_url, "duration-by-status", jql_query)
-        transition_data = run_timepiece_report(api_key, base_url, "transition-dates", jql_query)
+        duration_data = fetch_status_durations(api_key, base_url, jql_query)
+        transition_data = fetch_transition_dates(api_key, base_url, jql_query)
     except Exception as e:
         st.error(f"Failed to fetch from Timepiece: {e}")
         st.stop()
