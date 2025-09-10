@@ -11,10 +11,26 @@ with st.sidebar:
     st.title("Cycle Time Analysis (Timepiece API)")
     st.caption("Fetch Jira data via Timepiece")
 
-    api_key = st.text_input("API Key", type="password")
-    jql_query = st.text_area("JQL Query", value="project = ABC AND statusCategory != Done")
+    api_key = st.text_input("Timepiece tisjwt Token", type="password")
+    jql_query = st.text_area(
+        "JQL Query",
+        value="project IN (\"CODAS 7 - Sales & Marketing\") AND statusCategory != Done"
+    )
 
     team = st.text_input("Team Name", value="Team 1")
+
+    st.markdown("### API Endpoint")
+    base_url = st.selectbox(
+        "Choose Timepiece API base URL",
+        options=[
+            "https://cdssystems.atlassian.net/rest/tis/1.0/report/export",
+            "https://cdssystems.atlassian.net/rest/tis/report/export",
+            "https://cdssystems.atlassian.net/rest/timepiece/1.0/report/export",
+            "https://cdssystems.atlassian.net/rest/timepiece/report/export",
+        ],
+        index=0,
+        help="Try different paths if you see 404 errors"
+    )
 
     st.markdown("### Status Buckets")
     default_rules = """Development = In Dev, Implementation, Coding
@@ -25,15 +41,14 @@ On Hold = Blocked, Waiting, Paused"""
     fetch_button = st.button("Fetch Data")
 
 if not fetch_button or not api_key or not jql_query:
-    st.info("Enter API key, JQL query, and press **Fetch Data**.")
+    st.info("Enter token, JQL query, and press **Fetch Data**.")
     st.stop()
 
 # ===================== FETCH DATA FROM TIMEPIECE =====================
 with st.spinner("Fetching reports from Timepiece..."):
     try:
-        duration_data = run_timepiece_report(api_key, "duration-by-status", jql_query)
-        transition_data = run_timepiece_report(api_key, "transition-dates", jql_query)
-
+        duration_data = run_timepiece_report(api_key, base_url, "duration-by-status", jql_query)
+        transition_data = run_timepiece_report(api_key, base_url, "transition-dates", jql_query)
     except Exception as e:
         st.error(f"Failed to fetch from Timepiece: {e}")
         st.stop()
