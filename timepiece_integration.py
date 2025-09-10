@@ -3,7 +3,7 @@ import time
 import pandas as pd
 from typing import Dict, List
 
-BASE_URL = "https://tis.obss.io/rest/report/export"
+BASE_URL = "https://cdssystems.atlassian.net/rest/tis/1.0/report/export"
 
 
 def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict = None) -> dict:
