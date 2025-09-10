@@ -33,6 +33,7 @@ with st.spinner("Fetching reports from Timepiece..."):
     try:
         duration_data = run_timepiece_report(api_key, "duration-by-status", jql_query)
         transition_data = run_timepiece_report(api_key, "transition-dates", jql_query)
+
     except Exception as e:
         st.error(f"Failed to fetch from Timepiece: {e}")
         st.stop()
