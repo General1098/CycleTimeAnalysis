@@ -3,36 +3,59 @@ import time
 import pandas as pd
 from typing import Dict, List
 
-BASE_URL = "https://tis.obss.io"
+BASE_URL = "https://tis.obss.io/rest/report/export"
+
 
 def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict = None) -> dict:
-    """Run a Timepiece report and return JSON."""
+    """
+    Run a Timepiece report (e.g., 'duration-by-status', 'transition-dates')
+    and return JSON results.
+    """
     headers = {"Authorization": f"tisjwt {api_key}"}
-    start = requests.post(
-        f"{BASE_URL}/rest/report/{report_type}/export",
-        headers=headers,
-        params={"jql": jql, **(params or {})}
-    )
+
+    # 1. Initiate export
+    body = {
+        "reportType": report_type,
+        "jql": jql,
+        "format": "json"
+    }
+    if params:
+        body.update(params)
+
+    start = requests.post(BASE_URL, headers=headers, json=body)
     start.raise_for_status()
     export_id = start.json()["id"]
 
+    # 2. Poll until completed
     while True:
-        status = requests.get(f"{BASE_URL}/rest/report/export/{export_id}", headers=headers)
-        status.raise_for_status()
-        data = status.json()
-        if data["status"] == "COMPLETED":
+        status_resp = requests.get(f"{BASE_URL}/{export_id}", headers=headers)
+        status_resp.raise_for_status()
+        status_data = status_resp.json()
+        status = status_data.get("status")
+        if status == "COMPLETED":
             break
-        elif data["status"] in ("FAILED", "ERROR"):
-            raise RuntimeError("Export failed")
+        elif status in ("FAILED", "ERROR"):
+            raise RuntimeError(f"Report export failed: {status_data}")
         time.sleep(3)
 
-    download = requests.get(f"{BASE_URL}/rest/report/export/{export_id}/download", headers=headers)
+    # 3. Download completed report
+    download = requests.get(f"{BASE_URL}/{export_id}/Download", headers=headers)
     download.raise_for_status()
-    return download.json()
+
+    try:
+        return download.json()
+    except Exception:
+        # If CSV/XLS is returned instead of JSON
+        return {"raw": download.text}
 
 
 def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
-    """Parse textarea rules like 'Development = In Dev, Implementation' into dict."""
+    """
+    Parse textarea rules like:
+    Development = In Dev, Implementation
+    Review = QA, Test
+    On Hold = Blocked, Waiting
+    """
     rules = {}
     for line in rules_text.splitlines():
         line = line.strip()
@@ -44,9 +67,12 @@ def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
 
 
 def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
-    """Merge Duration by Status + Transition Dates into one DataFrame."""
+    """
+    Merge Duration by Status + Transition Dates into one DataFrame.
+    """
     rows = []
 
+    # Lookup for transition dates
     transition_lookup = {}
     for issue in transition_data.get("issues", []):
         key = issue["key"]
@@ -55,6 +81,7 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
         end_date = next((t["date"] for t in transitions if t["to"] == "Done"), None)
         transition_lookup[key] = {"Start": start_date, "End": end_date}
 
+    # Process durations
     for issue in duration_data.get("issues", []):
         key = issue["key"]
         row = {"Key": key}
@@ -62,7 +89,7 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
 
         for bucket, statuses in status_rules.items():
             dur = sum(
-                (s["durationSeconds"] for s in issue["durations"] if s["statusName"] in statuses),
+                (s["durationSeconds"] for s in issue.get("durations", []) if s["statusName"] in statuses),
                 0
             )
             row[bucket] = dur / 86400.0
