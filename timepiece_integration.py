@@ -3,40 +3,36 @@ import time
 import pandas as pd
 from typing import Dict, List
 
-# Update base URL for your Jira tenant
-BASE_URL = "https://cdssystems.atlassian.net/rest/tis/report/export"
 
-
-def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict = None, timeout_sec: int = 120) -> dict:
+def run_timepiece_report(api_key: str, base_url: str, report_type: str, jql: str, params: Dict = None, timeout_sec: int = 120) -> dict:
     """
-    Run a Timepiece report (e.g., 'duration-by-status', 'transition-dates')
-    and return JSON results.
+    Run a Timepiece report and return JSON.
+    base_url should point to the report export endpoint, e.g.:
+      https://yourdomain.atlassian.net/rest/tis/1.0/report/export
+      https://yourdomain.atlassian.net/rest/tis/report/export
+      https://yourdomain.atlassian.net/rest/timepiece/1.0/report/export
+      https://yourdomain.atlassian.net/rest/timepiece/report/export
     """
     headers = {"Authorization": f"tisjwt {api_key}"}
-    body = {
-        "reportType": report_type,
-        "jql": jql,
-        "format": "json"
-    }
+    body = {"reportType": report_type, "jql": jql, "format": "json"}
     if params:
         body.update(params)
 
     # 1. Initiate export
-    start = requests.post(BASE_URL, headers=headers, json=body)
-    print("DEBUG URL:", BASE_URL)
+    start = requests.post(base_url, headers=headers, json=body)
+    print("DEBUG INIT URL:", base_url)
     print("DEBUG BODY:", body)
-    print("DEBUG HEADERS:", headers)
     print("INIT RESPONSE:", start.status_code, start.text)
 
     start.raise_for_status()
     export_id = start.json()["id"]
 
     # 2. Poll until completed (with timeout)
-    poll_url = f"{BASE_URL}/{export_id}"
+    poll_url = f"{base_url}/{export_id}"
     deadline = time.time() + timeout_sec
     while True:
         if time.time() > deadline:
-            raise TimeoutError(f"Report export did not complete within {timeout_sec} seconds")
+            raise TimeoutError(f"Report export did not complete in {timeout_sec} seconds")
 
         status_resp = requests.get(poll_url, headers=headers)
         print("POLL RESPONSE:", status_resp.status_code, status_resp.text)
@@ -53,12 +49,11 @@ def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict 
         time.sleep(3)
 
     # 3. Download completed report
-    download_url = f"{BASE_URL}/{export_id}/Download"
+    download_url = f"{base_url}/{export_id}/Download"
     download = requests.get(download_url, headers=headers)
     print("DOWNLOAD RESPONSE:", download.status_code)
 
     download.raise_for_status()
-
     try:
         return download.json()
     except Exception:
@@ -66,12 +61,7 @@ def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict 
 
 
 def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
-    """
-    Parse textarea rules like:
-    Development = In Dev, Implementation
-    Review = QA, Test
-    On Hold = Blocked, Waiting
-    """
+    """Parse textarea rules like 'Development = In Dev, Implementation' into dict."""
     rules = {}
     for line in rules_text.splitlines():
         line = line.strip()
@@ -83,9 +73,7 @@ def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
 
 
 def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
-    """
-    Merge Duration by Status + Transition Dates into one DataFrame.
-    """
+    """Merge Duration by Status + Transition Dates into one DataFrame."""
     rows = []
 
     # Lookup for transition dates
