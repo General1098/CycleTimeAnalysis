@@ -7,7 +7,7 @@ BASE_URL = "https://tis.obss.io"
 
 def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict = None) -> dict:
     """Run a Timepiece report and return JSON."""
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = {"Authorization": f"tisjwt {api_key}"}
     start = requests.post(
         f"{BASE_URL}/rest/report/{report_type}/export",
         headers=headers,
