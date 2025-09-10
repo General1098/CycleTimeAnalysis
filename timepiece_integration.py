@@ -3,17 +3,16 @@ import time
 import pandas as pd
 from typing import Dict, List
 
-BASE_URL = "https://cdssystems.atlassian.net/rest/tis/1.0/report/export"
+# Update base URL for your Jira tenant
+BASE_URL = "https://cdssystems.atlassian.net/rest/tis/report/export"
 
 
-def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict = None) -> dict:
+def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict = None, timeout_sec: int = 120) -> dict:
     """
     Run a Timepiece report (e.g., 'duration-by-status', 'transition-dates')
     and return JSON results.
     """
     headers = {"Authorization": f"tisjwt {api_key}"}
-
-    # 1. Initiate export
     body = {
         "reportType": report_type,
         "jql": jql,
@@ -22,30 +21,47 @@ def run_timepiece_report(api_key: str, report_type: str, jql: str, params: Dict 
     if params:
         body.update(params)
 
+    # 1. Initiate export
     start = requests.post(BASE_URL, headers=headers, json=body)
+    print("DEBUG URL:", BASE_URL)
+    print("DEBUG BODY:", body)
+    print("DEBUG HEADERS:", headers)
+    print("INIT RESPONSE:", start.status_code, start.text)
+
     start.raise_for_status()
     export_id = start.json()["id"]
 
-    # 2. Poll until completed
+    # 2. Poll until completed (with timeout)
+    poll_url = f"{BASE_URL}/{export_id}"
+    deadline = time.time() + timeout_sec
     while True:
-        status_resp = requests.get(f"{BASE_URL}/{export_id}", headers=headers)
+        if time.time() > deadline:
+            raise TimeoutError(f"Report export did not complete within {timeout_sec} seconds")
+
+        status_resp = requests.get(poll_url, headers=headers)
+        print("POLL RESPONSE:", status_resp.status_code, status_resp.text)
+
         status_resp.raise_for_status()
         status_data = status_resp.json()
         status = status_data.get("status")
+
         if status == "COMPLETED":
             break
         elif status in ("FAILED", "ERROR"):
             raise RuntimeError(f"Report export failed: {status_data}")
+
         time.sleep(3)
 
     # 3. Download completed report
-    download = requests.get(f"{BASE_URL}/{export_id}/Download", headers=headers)
+    download_url = f"{BASE_URL}/{export_id}/Download"
+    download = requests.get(download_url, headers=headers)
+    print("DOWNLOAD RESPONSE:", download.status_code)
+
     download.raise_for_status()
 
     try:
         return download.json()
     except Exception:
-        # If CSV/XLS is returned instead of JSON
         return {"raw": download.text}
 
 
