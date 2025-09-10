@@ -8,8 +8,8 @@ st.set_page_config(page_title="Cycle Time Analysis", layout="wide")
 
 # ===================== SIDEBAR: SETTINGS =====================
 with st.sidebar:
-    st.title("Cycle Time Analysis (Timepiece API)")
-    st.caption("Fetch Jira data via Timepiece")
+    st.title("Cycle Time Analysis (OBSS Timepiece API)")
+    st.caption("Fetch Jira data via OBSS Timepiece")
 
     api_key = st.text_input("Timepiece tisjwt Token", type="password")
     jql_query = st.text_area(
@@ -20,16 +20,10 @@ with st.sidebar:
     team = st.text_input("Team Name", value="Team 1")
 
     st.markdown("### API Endpoint")
-    base_url = st.selectbox(
-        "Choose Timepiece API base URL",
-        options=[
-            "https://cdssystems.atlassian.net/rest/tis/1.0/report/export",
-            "https://cdssystems.atlassian.net/rest/tis/report/export",
-            "https://cdssystems.atlassian.net/rest/timepiece/1.0/report/export",
-            "https://cdssystems.atlassian.net/rest/timepiece/report/export",
-        ],
-        index=0,
-        help="Try different paths if you see 404 errors"
+    base_url = st.text_input(
+        "Timepiece API base URL",
+        value="https://cdssystems.atlassian.net/rest/com.obss.plugin.time-in-status/1.0/report/export",
+        help="Base export endpoint for OBSS Timepiece"
     )
 
     st.markdown("### Status Buckets")
