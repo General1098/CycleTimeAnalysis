@@ -75,11 +75,23 @@ with tabs[0]:
 
     avg_ct = round(view_df["CT"].mean(), 2) if view_df["CT"].notna().any() else np.nan
     p85_ct = round(view_df["CT"].quantile(0.85), 2) if view_df["CT"].notna().any() else np.nan
-    items_this_month = view_df["_bucketer"].dt.to_period("M").value_counts().sort_index().iloc[-1] if not view_df.empty else 0
+
+    if not view_df.empty and view_df["_bucketer"].notna().any():
+        items_this_month = (
+            view_df["_bucketer"]
+            .dropna()
+            .dt.to_period("M")
+            .value_counts()
+            .sort_index()
+            .iloc[-1]
+        )
+    else:
+        items_this_month = 0
 
     col1.metric("Average CT (days)", "--" if np.isnan(avg_ct) else avg_ct)
     col2.metric("85th Percentile CT (days)", "--" if np.isnan(p85_ct) else p85_ct)
     col3.metric("Items this month", int(items_this_month))
+
 
 # ---------- CYCLE TIME ----------
 with tabs[1]:
