@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import altair as alt
 import sys, os
+import timepiece_integration
+st.write("Loaded from:", timepiece_integration.__file__)
 
 # Ensure local imports work
 sys.path.append(os.path.dirname(__file__))
