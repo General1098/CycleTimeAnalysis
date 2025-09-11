@@ -4,12 +4,13 @@ from typing import Dict, List
 
 def fetch_status_durations(api_key: str, base_url: str, jql: str) -> dict:
     headers = {
-        "Authorization": f"tisjwt {api_key}",
+        "Authorization": f"TISJWT {api_key}",
         "Content-Type": "application/x-www-form-urlencoded"
     }
     params = {
         "filterType": "customjql",
         "customjql": jql,
+        "calendar": "normalHours",
         "columnsBy": "statusDuration",
         "outputType": "json"
     }
@@ -19,12 +20,13 @@ def fetch_status_durations(api_key: str, base_url: str, jql: str) -> dict:
 
 def fetch_transition_dates(api_key: str, base_url: str, jql: str) -> dict:
     headers = {
-        "Authorization": f"tisjwt {api_key}",
+        "Authorization": f"TISJWT {api_key}",
         "Content-Type": "application/x-www-form-urlencoded"
     }
     params = {
         "filterType": "customjql",
         "customjql": jql,
+        "calendar": "normalHours",
         "columnsBy": "firstTransitionToStatusDate",
         "outputType": "json"
     }
