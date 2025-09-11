@@ -158,4 +158,9 @@ with tabs[2]:
 # ---------- DATA ----------
 with tabs[3]:
     st.subheader("Data preview")
-    st.dataframe(view_df.head(1000), use_container_width=True)
+
+    row_count = len(view_df)
+    st.caption(f"Showing all {row_count} rows returned from Timepiece")
+
+    st.dataframe(view_df, use_container_width=True)
+
