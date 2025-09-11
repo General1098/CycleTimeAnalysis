@@ -28,7 +28,6 @@ with st.sidebar:
 
     api_key = st.text_input("Timepiece TISJWT Token", type="password")
     filter_id = st.text_input("Saved Filter ID", value="10580")
-    team = st.text_input("Team Name", value="Team 1")
 
     st.markdown("### Status Buckets")
     default_rules = """Blocked = On Hold (C7SM)
@@ -38,8 +37,8 @@ Review = Review (C7SM)"""
 
     fetch_button = st.button("Fetch Data")
 
-if not fetch_button or not api_key or not filter_id:
-    st.info("Enter token, Filter ID, and press **Fetch Data**.")
+if not api_key or not filter_id:
+    st.info("Enter token and Filter ID, then press **Fetch Data**.")
     st.stop()
 
 # ===================== FETCH DATA FROM TIMEPIECE =====================
@@ -51,8 +50,12 @@ if fetch_button:
             status_rules = parse_status_rules(rules_text)
             raw = build_dataframe(duration_data, transition_data, status_rules)
 
-            # Detect teams automatically
-            raw["Team"] = raw["Key"].apply(assign_team)
+            # Assign teams automatically
+            if not raw.empty and "Key" in raw.columns:
+                raw["Team"] = raw["Key"].apply(assign_team)
+            else:
+                raw["Team"] = "Unknown"
+
             raw["_bucketer"] = pd.to_datetime(raw["End"], errors="coerce")
 
             # Cache results
@@ -67,11 +70,6 @@ if "raw_data" not in st.session_state:
     st.stop()
 
 raw = st.session_state["raw_data"]
-
-# ===================== PROCESS DATA =====================
-status_rules = parse_status_rules(rules_text)
-raw = build_dataframe(duration_data, transition_data, status_rules)
-raw["_bucketer"] = pd.to_datetime(raw["End"], errors="coerce")
 
 if raw.empty:
     st.warning("No data returned from Timepiece.")
@@ -118,7 +116,6 @@ with tabs[0]:
     col2.metric("85th Percentile CT (days)", "--" if np.isnan(p85_ct) else p85_ct)
     col3.metric("Items this month", int(items_this_month))
 
-
 # ---------- CYCLE TIME ----------
 with tabs[1]:
     st.subheader("Cycle Time Trends")
@@ -149,7 +146,12 @@ with tabs[2]:
         if slow.empty:
             st.info("No items above the 85th percentile.")
         else:
-            st.dataframe(slow[["Key", "Team", "CT", "Start", "End"]].sort_values("CT", ascending=False).head(200), use_container_width=True)
+            st.dataframe(
+                slow[["Key", "Team", "CT", "Start", "End"]]
+                .sort_values("CT", ascending=False)
+                .head(200),
+                use_container_width=True
+            )
     else:
         st.info("No data available.")
 
