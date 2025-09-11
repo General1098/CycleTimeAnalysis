@@ -115,22 +115,33 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
             for c in row.get("valueColumns", [])
         }
 
-        # Start = first entry into any development-like status
+
+        def normalize(name: str) -> str:
+            return name.strip().lower() if name else name
+        
+        # When building value_cols
+        value_cols = {
+            normalize(duration_id_to_name.get(c["id"], c["id"])): c.get("raw")
+            for c in row.get("valueColumns", [])
+        }
+        
+        # When checking for start/end
         start_date = (
-            cols.get("In Development (C7SM)")
-            or cols.get("In Progress (C7O)")
-            or cols.get("In Development (C7T4)")
+            cols.get(normalize("In Development (C7SM)"))
+            or cols.get(normalize("In Progress (C7O)"))
+            or cols.get(normalize("In Development (C7T4)"))
         )
         
-        # End = first entry into any Done/Complete-like status
         end_date = (
-            cols.get("Done (C7SM)")
-            or cols.get("Done (C7O)")
-            or cols.get("Done (C7T4)")
-            or cols.get("Complete (C7SM)")
-            or cols.get("Complete (C7O)")
-            or cols.get("Complete (C7T4)")
+            cols.get(normalize("Done (C7SM)"))
+            or cols.get(normalize("Done (C7O)"))
+            or cols.get(normalize("Done (C7T4)"))
+            or cols.get(normalize("Complete (C7SM)"))
+            or cols.get(normalize("Complete (C7O)"))
+            or cols.get(normalize("Complete (C7T4)"))
         )
+        
+        print("DEBUG available statuses:", list(cols.keys()))
 
         transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
 
