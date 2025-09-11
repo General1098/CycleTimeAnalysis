@@ -115,18 +115,21 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
             for c in row.get("valueColumns", [])
         }
 
-        # Start = first entry into development-type statuses
+        # Start = first entry into any development-like status
         start_date = (
             cols.get("In Development (C7SM)")
             or cols.get("In Progress (C7O)")
             or cols.get("In Development (C7T4)")
         )
-
-        # End = first entry into any Done status
+        
+        # End = first entry into any Done/Complete-like status
         end_date = (
             cols.get("Done (C7SM)")
             or cols.get("Done (C7O)")
             or cols.get("Done (C7T4)")
+            or cols.get("Complete (C7SM)")
+            or cols.get("Complete (C7O)")
+            or cols.get("Complete (C7T4)")
         )
 
         transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
