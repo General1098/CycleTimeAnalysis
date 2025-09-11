@@ -84,15 +84,19 @@ def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
     return rules
 
 
-def find_transition_date(cols: dict, candidates: List[str]) -> str:
+def build_status_lookup(data: dict) -> Dict[str, str]:
     """
-    Find the first matching transition date for one of the candidate statuses.
+    Build a lookup of status ID -> "Name (ProjectKey)" using includedStatuses.
     """
-    for candidate in candidates:
-        for status_name, value in cols.items():
-            if candidate.lower() in status_name.lower() and value not in (None, "-", ""):
-                return value
-    return None
+    lookup = {}
+    for st in data.get("includedStatuses", []):
+        proj = st.get("scopeProjectKey")
+        name = st.get("name")
+        if proj:
+            lookup[st["id"]] = f"{name} ({proj})"
+        else:
+            lookup[st["id"]] = name
+    return lookup
 
 
 # ------------------------------
@@ -102,15 +106,9 @@ def find_transition_date(cols: dict, candidates: List[str]) -> str:
 def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
     rows = []
 
-    # ---- Build lookup maps ----
-    duration_id_to_name = {
-        c["id"]: c["value"]
-        for c in duration_data.get("table", {}).get("header", {}).get("valueColumns", [])
-    }
-    transition_id_to_name = {
-        c["id"]: c["value"]
-        for c in transition_data.get("table", {}).get("header", {}).get("valueColumns", [])
-    }
+    # Build ID -> Name lookups
+    duration_lookup = build_status_lookup(duration_data)
+    transition_lookup_map = build_status_lookup(transition_data)
 
     # ---- Map transition dates ----
     transition_lookup = {}
@@ -122,15 +120,22 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
             continue
 
         cols = {
-            transition_id_to_name.get(c["id"], c["id"]): c.get("value")
+            transition_lookup_map.get(c["id"], c["id"]): c.get("value")
             for c in row.get("valueColumns", [])
         }
 
-        start_date = find_transition_date(
-            cols, ["In Development (C7SM)", "In Progress (C7O)", "In Development (C7T4)"]
+        start_date = (
+            cols.get("In Development (C7SM)")
+            or cols.get("In Progress (C7O)")
+            or cols.get("In Development (C7T4)")
         )
-        end_date = find_transition_date(
-            cols, ["Done (C7SM)", "Done (C7O)", "Done (C7T4)", "Complete (C7SM)", "Complete (C7O)", "Complete (C7T4)"]
+        end_date = (
+            cols.get("Done (C7SM)")
+            or cols.get("Done (C7O)")
+            or cols.get("Done (C7T4)")
+            or cols.get("Complete (C7SM)")
+            or cols.get("Complete (C7O)")
+            or cols.get("Complete (C7T4)")
         )
 
         transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
@@ -143,9 +148,9 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
         if not issue_key:
             continue
 
-        # Convert IDs → names for value columns
+        # Map duration columns with status names
         value_cols = {
-            duration_id_to_name.get(c["id"], c["id"]): c.get("raw")
+            duration_lookup.get(c["id"], c["id"]): c.get("raw")
             for c in row.get("valueColumns", [])
         }
 
@@ -157,7 +162,7 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
             for s in statuses:
                 if s in value_cols and value_cols[s] not in (None, "-", ""):
                     try:
-                        dur += float(value_cols[s]) / 86400000.0  # raw is ms
+                        dur += float(value_cols[s]) / 86400000.0  # raw ms → days
                     except Exception:
                         pass
             record[bucket] = dur
