@@ -11,6 +11,16 @@ from timepiece_integration import fetch_status_durations, fetch_transition_dates
 
 st.set_page_config(page_title="Cycle Time Analysis", layout="wide")
 
+# ---- Team detection from issue key ----
+def assign_team(issue_key: str) -> str:
+    if issue_key.startswith("C7SM"):
+        return "Team 1"
+    elif issue_key.startswith("C7O"):
+        return "Team 2"
+    elif issue_key.startswith("C7T4"):
+        return "Team 4"
+    return "Other"
+
 # ===================== SIDEBAR: SETTINGS =====================
 with st.sidebar:
     st.title("Cycle Time Analysis (OBSS Timepiece API)")
