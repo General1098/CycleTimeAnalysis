@@ -84,18 +84,20 @@ def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
     return rules
 
 
-def build_status_lookup(data: dict) -> Dict[str, str]:
+def build_status_lookup(*datasets: dict) -> Dict[str, str]:
     """
-    Build a lookup of status ID -> "Name (ProjectKey)" using includedStatuses.
+    Build a merged lookup of status ID -> "Name (ProjectKey)" using includedStatuses
+    from one or more API responses.
     """
     lookup = {}
-    for st in data.get("includedStatuses", []):
-        proj = st.get("scopeProjectKey")
-        name = st.get("name")
-        if proj:
-            lookup[st["id"]] = f"{name} ({proj})"
-        else:
-            lookup[st["id"]] = name
+    for data in datasets:
+        for st in data.get("includedStatuses", []):
+            proj = st.get("scopeProjectKey")
+            name = st.get("name")
+            if proj:
+                lookup[st["id"]] = f"{name} ({proj})"
+            else:
+                lookup[st["id"]] = name
     return lookup
 
 
@@ -106,9 +108,8 @@ def build_status_lookup(data: dict) -> Dict[str, str]:
 def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
     rows = []
 
-    # Build ID -> Name lookups
-    duration_lookup = build_status_lookup(duration_data)
-    transition_lookup_map = build_status_lookup(transition_data)
+    # Merge statuses from both responses so all projects are covered
+    status_lookup = build_status_lookup(duration_data, transition_data)
 
     # ---- Map transition dates ----
     transition_lookup = {}
@@ -120,7 +121,7 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
             continue
 
         cols = {
-            transition_lookup_map.get(c["id"], c["id"]): c.get("value")
+            status_lookup.get(c["id"], c["id"]): c.get("value")
             for c in row.get("valueColumns", [])
         }
 
@@ -150,7 +151,7 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
 
         # Map duration columns with status names
         value_cols = {
-            duration_lookup.get(c["id"], c["id"]): c.get("raw")
+            status_lookup.get(c["id"], c["id"]): c.get("raw")
             for c in row.get("valueColumns", [])
         }
 
