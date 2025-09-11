@@ -43,13 +43,30 @@ if not fetch_button or not api_key or not filter_id:
     st.stop()
 
 # ===================== FETCH DATA FROM TIMEPIECE =====================
-with st.spinner("Fetching reports from Timepiece..."):
-    try:
-        duration_data = fetch_status_durations(api_key, filter_id)
-        transition_data = fetch_transition_dates(api_key, filter_id)
-    except Exception as e:
-        st.error(f"Failed to fetch from Timepiece: {e}")
-        st.stop()
+if fetch_button:
+    with st.spinner("Fetching reports from Timepiece..."):
+        try:
+            duration_data = fetch_status_durations(api_key, filter_id)
+            transition_data = fetch_transition_dates(api_key, filter_id)
+            status_rules = parse_status_rules(rules_text)
+            raw = build_dataframe(duration_data, transition_data, status_rules)
+
+            # Detect teams automatically
+            raw["Team"] = raw["Key"].apply(assign_team)
+            raw["_bucketer"] = pd.to_datetime(raw["End"], errors="coerce")
+
+            # Cache results
+            st.session_state["raw_data"] = raw
+        except Exception as e:
+            st.error(f"Failed to fetch from Timepiece: {e}")
+            st.stop()
+
+# Use cached data if available
+if "raw_data" not in st.session_state:
+    st.info("Fetch data first.")
+    st.stop()
+
+raw = st.session_state["raw_data"]
 
 # ===================== PROCESS DATA =====================
 status_rules = parse_status_rules(rules_text)
