@@ -16,10 +16,10 @@ with st.sidebar:
     st.title("Cycle Time Analysis (OBSS Timepiece API)")
     st.caption("Fetch Jira data via OBSS Timepiece Cloud")
 
-    api_key = st.text_input("Timepiece tisjwt Token", type="password")
+    api_key = st.text_input("Timepiece API Token", type="password")
     jql_query = st.text_area(
         "JQL Query",
-        value="project IN (\"CODAS 7 - Sales & Marketing\") AND statusCategory != Done"
+        value="project = C7SM AND statusCategory != Done"
     )
 
     team = st.text_input("Team Name", value="Team 1")
@@ -27,7 +27,7 @@ with st.sidebar:
     st.markdown("### API Endpoint")
     base_url = st.text_input(
         "Timepiece API base URL",
-        value="https://tis.obss.io/rest/list-v2",
+        value="https://tis.obss.io/rest/list2",
         help="OBSS Cloud endpoint"
     )
 
@@ -86,7 +86,9 @@ with tabs[0]:
 
     avg_ct = round(view_df["CT"].mean(), 2) if view_df["CT"].notna().any() else np.nan
     p85_ct = round(view_df["CT"].quantile(0.85), 2) if view_df["CT"].notna().any() else np.nan
-    items_this_month = view_df["_bucketer"].dt.to_period("M").value_counts().sort_index().iloc[-1] if not view_df.empty else 0
+    # Count items this month - handle case where no valid dates exist
+    monthly_counts = view_df["_bucketer"].dt.to_period("M").value_counts().sort_index()
+    items_this_month = monthly_counts.iloc[-1] if len(monthly_counts) > 0 else 0
 
     col1.metric("Average CT (days)", "--" if np.isnan(avg_ct) else avg_ct)
     col2.metric("85th Percentile CT (days)", "--" if np.isnan(p85_ct) else p85_ct)
