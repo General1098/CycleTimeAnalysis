@@ -71,7 +71,6 @@ raw = st.session_state["raw_data"]
 # ===================== PROCESS DATA =====================
 status_rules = parse_status_rules(rules_text)
 raw = build_dataframe(duration_data, transition_data, status_rules)
-raw["Team"] = team
 raw["_bucketer"] = pd.to_datetime(raw["End"], errors="coerce")
 
 if raw.empty:
