@@ -5,42 +5,68 @@ from typing import Dict, List
 BASE_URL = "https://tis.obss.io/rest/list2"
 
 # ------------------------------
-# Fetch reports from Timepiece
+# Generic fetch with paging
 # ------------------------------
 
-def fetch_status_durations(api_key: str, filter_id: str) -> dict:
+def fetch_with_paging(api_key: str, params: dict) -> dict:
     headers = {
         "Authorization": f"TISJWT {api_key}",
         "Content-Type": "application/x-www-form-urlencoded"
     }
+
+    combined = None
+    next_token = None
+
+    while True:
+        if next_token:
+            params["nextPageToken"] = next_token
+        elif "nextPageToken" in params:
+            params.pop("nextPageToken")
+
+        resp = requests.post(BASE_URL, headers=headers, data=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Merge into combined result
+        if combined is None:
+            combined = data
+        else:
+            combined["table"]["body"]["rows"].extend(data["table"]["body"]["rows"])
+
+        next_token = data.get("nextPageToken")
+        if not next_token:
+            break
+
+    return combined
+
+
+# ------------------------------
+# Fetch reports from Timepiece
+# ------------------------------
+
+def fetch_status_durations(api_key: str, filter_id: str) -> dict:
     params = {
         "filterType": "jqlfilter",
         "jqlFilterID": filter_id,
         "columnsBy": "statusduration",
         "outputType": "json",
         "calendar": "normalHours",
-        "multiVisitBehavior": "total"
+        "multiVisitBehavior": "total",
+        "pageSize": 100
     }
-    resp = requests.post(BASE_URL, headers=headers, data=params)
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_with_paging(api_key, params)
 
 
 def fetch_transition_dates(api_key: str, filter_id: str) -> dict:
-    headers = {
-        "Authorization": f"TISJWT {api_key}",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
     params = {
         "filterType": "jqlfilter",
         "jqlFilterID": filter_id,
         "columnsBy": "firstTransitionToStatusDate",
         "outputType": "json",
-        "calendar": "normalHours"
+        "calendar": "normalHours",
+        "pageSize": 100
     }
-    resp = requests.post(BASE_URL, headers=headers, data=params)
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_with_paging(api_key, params)
 
 
 # ------------------------------
