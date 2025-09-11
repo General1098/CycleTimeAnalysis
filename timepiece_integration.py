@@ -86,11 +86,12 @@ def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
 
 def build_status_lookup(*datasets: dict) -> Dict[str, str]:
     """
-    Build a merged lookup of status ID -> "Name (ProjectKey)" using includedStatuses
-    from one or more API responses.
+    Build a merged lookup of status ID -> "Name (ProjectKey)" 
+    using both includedStatuses and header.valueColumns.
     """
     lookup = {}
     for data in datasets:
+        # From includedStatuses
         for st in data.get("includedStatuses", []):
             proj = st.get("scopeProjectKey")
             name = st.get("name")
@@ -98,8 +99,12 @@ def build_status_lookup(*datasets: dict) -> Dict[str, str]:
                 lookup[st["id"]] = f"{name} ({proj})"
             else:
                 lookup[st["id"]] = name
-    return lookup
 
+        # From header.valueColumns
+        for c in data.get("table", {}).get("header", {}).get("valueColumns", []):
+            lookup[c["id"]] = c["value"]
+
+    return lookup
 
 # ------------------------------
 # Build DataFrame from responses
