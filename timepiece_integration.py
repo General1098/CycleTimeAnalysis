@@ -1,171 +1,165 @@
-import requests
+import streamlit as st
 import pandas as pd
-from typing import Dict, List
+import numpy as np
+import altair as alt
+import sys, os
 
-BASE_URL = "https://tis.obss.io/rest/list2"
+# Ensure local imports work
+sys.path.append(os.path.dirname(__file__))
 
-# ------------------------------
-# Generic fetch with paging
-# ------------------------------
+from timepiece_integration import fetch_status_durations, fetch_transition_dates, parse_status_rules, build_dataframe
 
-def fetch_with_paging(api_key: str, params: dict) -> dict:
-    headers = {
-        "Authorization": f"TISJWT {api_key}",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
+st.set_page_config(page_title="Cycle Time Analysis", layout="wide")
 
-    combined = None
-    next_token = None
+# ---- Team detection from issue key ----
+def assign_team(issue_key: str) -> str:
+    if issue_key.startswith("C7SM"):
+        return "Team 1"
+    elif issue_key.startswith("C7O"):
+        return "Team 2"
+    elif issue_key.startswith("C7T4"):
+        return "Team 4"
+    return "Other"
 
-    while True:
-        if next_token:
-            params["nextPageToken"] = next_token
-        elif "nextPageToken" in params:
-            params.pop("nextPageToken")
+# ===================== SIDEBAR: SETTINGS =====================
+with st.sidebar:
+    st.title("Cycle Time Analysis (OBSS Timepiece API)")
+    st.caption("Fetch Jira data via OBSS Timepiece Cloud")
 
-        resp = requests.post(BASE_URL, headers=headers, data=params)
-        resp.raise_for_status()
-        data = resp.json()
+    api_key = st.text_input("Timepiece TISJWT Token", type="password")
+    filter_id = st.text_input("Saved Filter ID", value="10580")
 
-        # Merge into combined result
-        if combined is None:
-            combined = data
+    st.markdown("### Status Buckets")
+    default_rules = """Blocked = On Hold (C7SM)
+Development = In Development (C7SM), In Progress (C7O), In Development (C7T4)
+Review = Review (C7SM)"""
+    rules_text = st.text_area("Rules (Bucket = Status1, Status2, ...)", value=default_rules, height=120)
+
+    fetch_button = st.button("Fetch Data")
+
+if not api_key or not filter_id:
+    st.info("Enter token and Filter ID, then press **Fetch Data**.")
+    st.stop()
+
+# ===================== FETCH DATA FROM TIMEPIECE =====================
+if fetch_button:
+    with st.spinner("Fetching reports from Timepiece..."):
+        try:
+            duration_data = fetch_status_durations(api_key, filter_id)
+            transition_data = fetch_transition_dates(api_key, filter_id)
+            status_rules = parse_status_rules(rules_text)
+            raw = build_dataframe(duration_data, transition_data, status_rules)
+
+            # Assign teams automatically
+            if not raw.empty and "Key" in raw.columns:
+                raw["Team"] = raw["Key"].apply(assign_team)
+            else:
+                raw["Team"] = "Unknown"
+
+            raw["_bucketer"] = pd.to_datetime(raw["End"], errors="coerce")
+
+            # Cache results
+            st.session_state["raw_data"] = raw
+        except Exception as e:
+            st.error(f"Failed to fetch from Timepiece: {e}")
+            st.stop()
+
+# Use cached data if available
+if "raw_data" not in st.session_state:
+    st.info("Fetch data first.")
+    st.stop()
+
+raw = st.session_state["raw_data"]
+
+if raw.empty:
+    st.warning("No data returned from Timepiece.")
+    st.stop()
+
+# ===================== MAIN PAGE =====================
+st.title("Cycle Time Analysis")
+
+teams = sorted(raw["Team"].unique().tolist())
+selected_team = st.selectbox("Select Team", ["All Teams"] + teams, index=0)
+
+# Filter the view
+if selected_team == "All Teams":
+    view_df = raw.copy()
+else:
+    view_df = raw[raw["Team"] == selected_team].copy()
+
+st.caption("Cycle Time = Blocked + Development + Review (if present)")
+
+# ===================== TABS =====================
+tabs = st.tabs(["Overview", "Cycle Time", "Slowest Items", "Data"])
+
+# ---------- OVERVIEW ----------
+with tabs[0]:
+    st.subheader("Overview" + ("" if selected_team == "All Teams" else f" — {selected_team}"))
+    col1, col2, col3 = st.columns(3)
+
+    avg_ct = round(view_df["CT"].mean(), 2) if view_df["CT"].notna().any() else np.nan
+    p85_ct = round(view_df["CT"].quantile(0.85), 2) if view_df["CT"].notna().any() else np.nan
+
+    if not view_df.empty and view_df["_bucketer"].notna().any():
+        items_this_month = (
+            view_df["_bucketer"]
+            .dropna()
+            .dt.to_period("M")
+            .value_counts()
+            .sort_index()
+            .iloc[-1]
+        )
+    else:
+        items_this_month = 0
+
+    col1.metric("Average CT (days)", "--" if np.isnan(avg_ct) else avg_ct)
+    col2.metric("85th Percentile CT (days)", "--" if np.isnan(p85_ct) else p85_ct)
+    col3.metric("Items this month", int(items_this_month))
+
+# ---------- CYCLE TIME ----------
+with tabs[1]:
+    st.subheader("Cycle Time Trends")
+    if "_bucketer" in view_df.columns and view_df["_bucketer"].notna().any():
+        roll = view_df.groupby(view_df["_bucketer"].dt.to_period("M")).agg(
+            avg=("CT", "mean"),
+            p85=("CT", lambda s: s.quantile(0.85)),
+            items=("CT", "count")
+        ).reset_index()
+        roll["_bucketer"] = roll["_bucketer"].dt.to_timestamp()
+
+        base = alt.Chart(roll).encode(x=alt.X("_bucketer:T", title="Month", sort="ascending"))
+        st.altair_chart(base.mark_line(point=True).encode(y=alt.Y("avg:Q", title="Average CT (days)")), use_container_width=True)
+        st.altair_chart(base.mark_line(point=True).encode(y=alt.Y("p85:Q", title="85th CT (days)")), use_container_width=True)
+        st.altair_chart(base.mark_bar().encode(y=alt.Y("items:Q", title="Item Count")), use_container_width=True)
+    else:
+        st.info("No valid transition dates found for bucketing.")
+
+# ---------- SLOWEST ITEMS ----------
+with tabs[2]:
+    st.subheader("Slowest Items")
+    if not view_df.empty:
+        th = view_df["_bucketer"].dt.to_period("M")
+        p85 = view_df.groupby(th)["CT"].quantile(0.85).rename("p85")
+        merged = view_df.join(p85, on=th)
+        slow = merged[merged["CT"] > merged["p85"]].copy()
+
+        if slow.empty:
+            st.info("No items above the 85th percentile.")
         else:
-            combined["table"]["body"]["rows"].extend(data["table"]["body"]["rows"])
+            st.dataframe(
+                slow[["Key", "Team", "CT", "Start", "End"]]
+                .sort_values("CT", ascending=False)
+                .head(200),
+                use_container_width=True
+            )
+    else:
+        st.info("No data available.")
 
-        next_token = data.get("nextPageToken")
-        if not next_token:
-            break
+# ---------- DATA ----------
+with tabs[3]:
+    st.subheader("Data preview")
 
-    return combined
+    row_count = len(view_df)
+    st.caption(f"Showing all {row_count} rows returned from Timepiece")
 
-
-# ------------------------------
-# Fetch reports from Timepiece
-# ------------------------------
-
-def fetch_status_durations(api_key: str, filter_id: str) -> dict:
-    params = {
-        "filterType": "jqlfilter",
-        "jqlFilterID": filter_id,
-        "columnsBy": "statusduration",
-        "outputType": "json",
-        "calendar": "normalHours",
-        "multiVisitBehavior": "total",
-        "pageSize": 100
-    }
-    return fetch_with_paging(api_key, params)
-
-
-def fetch_transition_dates(api_key: str, filter_id: str) -> dict:
-    params = {
-        "filterType": "jqlfilter",
-        "jqlFilterID": filter_id,
-        "columnsBy": "firstTransitionToStatusDate",
-        "outputType": "json",
-        "calendar": "normalHours",
-        "pageSize": 100
-    }
-    return fetch_with_paging(api_key, params)
-
-
-# ------------------------------
-# Helpers
-# ------------------------------
-
-def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
-    rules = {}
-    for line in rules_text.splitlines():
-        line = line.strip()
-        if not line or "=" not in line:
-            continue
-        bucket, statuses = line.split("=", 1)
-        rules[bucket.strip()] = [s.strip() for s in statuses.split(",") if s.strip()]
-    return rules
-
-
-def find_transition_date(cols: dict, candidates: List[str]) -> str:
-    """
-    Find the first matching transition date for one of the candidate statuses.
-    """
-    for candidate in candidates:
-        for status_name, value in cols.items():
-            if candidate.lower() in status_name.lower() and value not in (None, "-", ""):
-                return value
-    return None
-
-
-# ------------------------------
-# Build DataFrame from responses
-# ------------------------------
-
-def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
-    rows = []
-
-    # ---- Build lookup maps ----
-    duration_id_to_name = {
-        c["id"]: c["value"]
-        for c in duration_data.get("table", {}).get("header", {}).get("valueColumns", [])
-    }
-    transition_id_to_name = {
-        c["id"]: c["value"]
-        for c in transition_data.get("table", {}).get("header", {}).get("valueColumns", [])
-    }
-
-    # ---- Map transition dates ----
-    transition_lookup = {}
-    for row in transition_data.get("table", {}).get("body", {}).get("rows", []):
-        issue_key = next(
-            (c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"), None
-        )
-        if not issue_key:
-            continue
-
-        cols = {
-            transition_id_to_name.get(c["id"], c["id"]): c.get("value")
-            for c in row.get("valueColumns", [])
-        }
-
-        start_date = find_transition_date(
-            cols, ["In Development (C7SM)", "In Progress (C7O)", "In Development (C7T4)"]
-        )
-        end_date = find_transition_date(
-            cols, ["Done (C7SM)", "Done (C7O)", "Done (C7T4)", "Complete (C7SM)", "Complete (C7O)", "Complete (C7T4)"]
-        )
-
-        transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
-
-    # ---- Durations ----
-    for row in duration_data.get("table", {}).get("body", {}).get("rows", []):
-        issue_key = next(
-            (c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"), None
-        )
-        if not issue_key:
-            continue
-
-        # Convert IDs → names for value columns
-        value_cols = {
-            duration_id_to_name.get(c["id"], c["id"]): c.get("raw")
-            for c in row.get("valueColumns", [])
-        }
-
-        record = {"Key": issue_key}
-        total_days = 0
-
-        for bucket, statuses in status_rules.items():
-            dur = 0
-            for s in statuses:
-                if s in value_cols and value_cols[s] not in (None, "-", ""):
-                    try:
-                        dur += float(value_cols[s]) / 86400000.0  # raw is ms
-                    except Exception:
-                        pass
-            record[bucket] = dur
-            total_days += dur
-
-        record["CT"] = total_days
-        record["Start"] = transition_lookup.get(issue_key, {}).get("Start")
-        record["End"] = transition_lookup.get(issue_key, {}).get("End")
-        rows.append(record)
-
-    return pd.DataFrame(rows)
+    st.dataframe(view_df, use_container_width=True)
