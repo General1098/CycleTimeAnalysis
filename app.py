@@ -26,7 +26,12 @@ with st.sidebar:
     st.title("Cycle Time Analysis (OBSS Timepiece API)")
     st.caption("Fetch Jira data via OBSS Timepiece Cloud")
 
-    api_key = st.text_input("Timepiece TISJWT Token", type="password")
+    # Default API key hardcoded
+    api_key = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJjb20ub2Jzcy5wbHVnaW4udGltZS1pbi1zdGF0dXMiLCJzdWIiOiI2MzIxZDYyMWM3NjAxYzhlNGFiZjMxZjciLCJjbGllbnRLZXkiOiIwYjRjZjE5NC0yN2Q4LTM0MjItOGJmNi0wMWI1NzdiYzg4ZjUiLCJpc3MiOiJjb20ub2Jzcy5wbHVnaW4udGltZS1pbi1zdGF0dXMiLCJleHAiOjQxMDI0NDQ3NDAsImlhdCI6MTc1NzU5NTAxOH0.5shgcu7jHiQ4L5rTqFIHIhE-tiKnBsaab39LdyP_A4M"
+    
+    # If you want to still display it (unhidden) in the sidebar:
+    st.text(f"Using API Key: {api_key[:6]}...{api_key[-6:]}")  # mask middle part for safety
+
     filter_id = st.text_input("Saved Filter ID", value="10580")
 
     st.markdown("### Status Buckets")
