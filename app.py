@@ -41,7 +41,7 @@ def monte_carlo_forecast_throughput(completions_per_week, num_simulations=10000,
                 total_done += np.random.choice(completions_per_week)
                 week_count += 1
             results.append(week_count * 7)  # convert to days
-        return results
+        return np.percentile(results, [50, 85, 95])
 
     elif weeks:  # Forecast number of items completed in N weeks
         for _ in range(num_simulations):
@@ -49,9 +49,7 @@ def monte_carlo_forecast_throughput(completions_per_week, num_simulations=10000,
             for _ in range(weeks):
                 total_done += np.random.choice(completions_per_week)
             results.append(total_done)
-        return results
-
-    return []
+        return np.percentile(results, [50, 85, 95])
 
 
 # ===================== SIDEBAR: SETTINGS =====================
@@ -131,7 +129,7 @@ st.caption("Cycle Time = Blocked + Development + Review (if present)")
 
 
 # ===================== TABS =====================
-tabs = st.tabs(["Overview", "Cycle Time", "Slowest Items", "Forecasting", "WIP", "Data"])
+tabs = st.tabs(["Overview", "Cycle Time", "Slowest Items", "Forecasting", "Data"])
 
 
 # ---------- OVERVIEW ----------
@@ -251,9 +249,13 @@ with tabs[3]:
                 sims = st.number_input(
                     "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
                 )
-                results = monte_carlo_forecast_throughput(
-                    throughput, num_simulations=sims, weeks=weeks
-                )
+                results = []
+                for _ in range(sims):
+                    total_done = 0
+                    for _ in range(weeks):
+                        total_done += np.random.choice(throughput)
+                    results.append(total_done)
+
                 p50, p85, p95 = np.percentile(results, [50, 85, 95])
 
                 st.write(f"In {weeks} weeks (starting {start_date:%d %b %Y}):")
@@ -280,9 +282,15 @@ with tabs[3]:
                 sims = st.number_input(
                     "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
                 )
-                results = monte_carlo_forecast_throughput(
-                    throughput, num_simulations=sims, items=items
-                )
+                results = []
+                for _ in range(sims):
+                    total_done = 0
+                    week_count = 0
+                    while total_done < items:
+                        total_done += np.random.choice(throughput)
+                        week_count += 1
+                    results.append(week_count * 7)  # days
+
                 p50, p85, p95 = np.percentile(results, [50, 85, 95])
 
                 st.write(f"To deliver {items} items (starting {start_date:%d %b %Y}):")
@@ -309,79 +317,8 @@ with tabs[3]:
                 st.altair_chart(hist, use_container_width=True)
 
 
-# ---------- WIP ----------
-with tabs[4]:
-    st.subheader("Work In Progress (WIP)")
-
-    # Identify WIP items (those with no End date)
-    wip_items = view_df[view_df["End"].isna()].copy()
-
-    if wip_items.empty:
-        st.info("No WIP items found.")
-    else:
-        # Calculate age in days since start
-        today = pd.to_datetime("today")
-        wip_items["Age (days)"] = (
-            today - pd.to_datetime(wip_items["Start"], errors="coerce")
-        ).dt.days
-
-        # Metrics
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Current WIP", len(wip_items))
-        col2.metric(
-            "Average WIP Age (days)",
-            round(wip_items["Age (days)"].mean(), 1) if not wip_items.empty else "--",
-        )
-        oldest_wip = wip_items["Age (days)"].max()
-        if pd.isna(oldest_wip):
-            col3.metric("Oldest WIP (days)", "--")
-        else:
-            col3.metric("Oldest WIP (days)", int(oldest_wip))
-
-
-        # Risk check: items older than 85th percentile of historical CT
-        if "CT" in raw and not raw["CT"].dropna().empty:
-            ct_85 = raw["CT"].quantile(0.85)
-            risky = wip_items[wip_items["Age (days)"] > ct_85]
-            if not risky.empty:
-                st.warning(
-                    f"{len(risky)} WIP items are older than the 85th percentile CT ({ct_85:.1f} days)."
-                )
-                st.dataframe(
-                    risky[["Key", "Team", "Start", "Age (days)"]],
-                    use_container_width=True,
-                )
-
-        # Breakdown by status
-        if "CurrentStatus" in wip_items.columns:
-            st.write("### WIP by Current Status")
-            st.bar_chart(wip_items["CurrentStatus"].value_counts())
-        else:
-            st.info("No Current Status info available in dataset.")
-
-        # Histogram of WIP ages
-        st.write("### Distribution of WIP Ages")
-        hist_data = pd.DataFrame({"Age (days)": wip_items["Age (days)"]})
-        hist = (
-            alt.Chart(hist_data)
-            .mark_bar()
-            .encode(
-                alt.X("Age (days):Q", bin=alt.Bin(maxbins=30)),
-                y="count()",
-            )
-        )
-        st.altair_chart(hist, use_container_width=True)
-
-        # Full table
-        st.write("### Current WIP Items")
-        st.dataframe(
-            wip_items[["Key", "Team", "Start", "Age (days)", "CurrentStatus"]],
-            use_container_width=True,
-        )
-
-
 # ---------- DATA ----------
-with tabs[5]:
+with tabs[4]:
     st.subheader("Data preview")
 
     row_count = len(view_df)
