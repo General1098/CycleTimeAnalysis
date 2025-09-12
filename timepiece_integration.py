@@ -1,96 +1,128 @@
-# ---------- FORECASTING ----------
-with tabs[3]:
-    st.subheader("Monte Carlo Forecasting (Throughput Based)")
+import requests
+import pandas as pd
+from typing import Dict, List
 
-    if view_df.empty or view_df["_bucketer"].dropna().empty:
-        st.info("No completion data available for forecasting.")
-    else:
-        # Build throughput history (items per week)
-        throughput = (
-            view_df["_bucketer"]
-            .dropna()
-            .dt.to_period("W")
-            .value_counts()
-            .values
+BASE_URL = "https://tis.obss.io/rest/list2"
+
+
+def fetch_status_durations(api_key: str, filter_id: str) -> dict:
+    headers = {
+        "Authorization": f"TISJWT {api_key}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    params = {
+        "filterType": "jqlfilter",
+        "jqlFilterID": filter_id,
+        "columnsBy": "statusduration",
+        "outputType": "json",
+        "calendar": "normalHours",
+        "multiVisitBehavior": "total",
+    }
+    resp = requests.post(BASE_URL, headers=headers, data=params)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_transition_dates(api_key: str, filter_id: str) -> dict:
+    headers = {
+        "Authorization": f"TISJWT {api_key}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    params = {
+        "filterType": "jqlfilter",
+        "jqlFilterID": filter_id,
+        "columnsBy": "firstTransitionToStatusDate",
+        "outputType": "json",
+        "calendar": "normalHours",
+    }
+    resp = requests.post(BASE_URL, headers=headers, data=params)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
+    rules = {}
+    for line in rules_text.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        bucket, statuses = line.split("=", 1)
+        rules[bucket.strip()] = [s.strip() for s in statuses.split(",") if s.strip()]
+    return rules
+
+
+def build_dataframe(
+    duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]
+) -> pd.DataFrame:
+    rows = []
+
+    # --- Map transition dates (Start & End) ---
+    transition_lookup = {}
+    for row in transition_data.get("table", {}).get("body", {}).get("rows", []):
+        issue_key = next(
+            (c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"),
+            None,
         )
-        if len(throughput) == 0:
-            st.info("Not enough throughput data.")
-        else:
-            mode = st.radio(
-                "Forecast mode",
-                ["How many items in N weeks?", "When will X items be done?"],
-                index=0,
-            )
-            start_date = st.date_input("Start date", datetime.date.today())
+        cols = {c["id"]: c.get("value") for c in row.get("valueColumns", [])}
 
-            if mode == "How many items in N weeks?":
-                weeks = st.number_input("Weeks", min_value=1, max_value=52, value=4)
-                sims = st.number_input(
-                    "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
-                )
-                results = []
-                for _ in range(sims):
-                    total_done = 0
-                    for _ in range(weeks):
-                        total_done += np.random.choice(throughput)
-                    results.append(total_done)
+        start_date = (
+            cols.get("In Development (C7SM)")
+            or cols.get("In Progress (C7O)")
+            or cols.get("In Development (C7T4)")
+        )
+        end_date = (
+            cols.get("Done (C7SM)")
+            or cols.get("Done (C7O)")
+            or cols.get("Done (C7T4)")
+        )
 
-                p50, p85, p95 = np.percentile(results, [50, 85, 95])
+        transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
 
-                st.write(f"In {weeks} weeks (starting {start_date:%d %b %Y}):")
-                st.write(f"- **50% likely**: {int(p50)} items")
-                st.write(f"- **85% likely**: {int(p85)} items")
-                st.write(f"- **95% likely**: {int(p95)} items")
+    # --- Durations & Current Status ---
+    for row in duration_data.get("table", {}).get("body", {}).get("rows", []):
+        issue_key = next(
+            (c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"),
+            None,
+        )
+        if not issue_key:
+            continue
 
-                # Histogram
-                chart_data = pd.DataFrame({"Items Delivered": results})
-                hist = (
-                    alt.Chart(chart_data)
-                    .mark_bar()
-                    .encode(
-                        alt.X("Items Delivered:Q", bin=alt.Bin(maxbins=30)),
-                        y="count()",
-                    )
-                )
-                st.altair_chart(hist, use_container_width=True)
+        # Collect duration values
+        value_cols = {c["id"]: c.get("raw") for c in row.get("valueColumns", [])}
 
-            else:
-                items = st.number_input(
-                    "Number of items", min_value=1, max_value=200, value=10
-                )
-                sims = st.number_input(
-                    "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
-                )
-                results = []
-                for _ in range(sims):
-                    total_done = 0
-                    week_count = 0
-                    while total_done < items:
-                        total_done += np.random.choice(throughput)
-                        week_count += 1
-                    results.append(week_count * 7)  # days
+        # Determine the most recent "current status"
+        current_status = None
+        if "currentState" in row:
+            try:
+                status_id = row["currentState"][0].get("id")
+                # Map ID back to human-readable name if possible
+                for col in row.get("valueColumns", []):
+                    if col.get("id") == status_id:
+                        current_status = col.get("value", status_id)
+                        break
+                if not current_status:  # fallback if not mapped
+                    current_status = status_id
+            except Exception:
+                current_status = None
 
-                p50, p85, p95 = np.percentile(results, [50, 85, 95])
+        record = {"Key": issue_key, "CurrentStatus": current_status}
+        total_days = 0
 
-                st.write(f"To deliver {items} items (starting {start_date:%d %b %Y}):")
-                st.write(
-                    f"- **50% likely**: {(start_date + datetime.timedelta(days=p50)):%d %b %Y}"
-                )
-                st.write(
-                    f"- **85% likely**: {(start_date + datetime.timedelta(days=p85)):%d %b %Y}"
-                )
-                st.write(
-                    f"- **95% likely**: {(start_date + datetime.timedelta(days=p95)):%d %b %Y}"
-                )
+        # Apply bucket rules
+        for bucket, statuses in status_rules.items():
+            dur = 0
+            for s in statuses:
+                if s in value_cols and value_cols[s] not in (None, "-", ""):
+                    try:
+                        dur += float(value_cols[s]) / 86400000.0  # ms → days
+                    except Exception:
+                        pass
+            record[bucket] = dur
+            total_days += dur
 
-                # Histogram
-                chart_data = pd.DataFrame({"Days to Complete": results})
-                hist = (
-                    alt.Chart(chart_data)
-                    .mark_bar()
-                    .encode(
-                        alt.X("Days to Complete:Q", bin=alt.Bin(maxbins=30)),
-                        y="count()",
-                    )
-                )
-                st.altair_chart(hist, use_container_width=True)
+        record["CT"] = total_days
+        record["Start"] = transition_lookup.get(issue_key, {}).get("Start")
+        record["End"] = transition_lookup.get(issue_key, {}).get("End")
+        rows.append(record)
+
+    return pd.DataFrame(rows)
