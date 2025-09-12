@@ -82,17 +82,20 @@ def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
     return rules
 
 
-def resolve_rules_to_ids(status_rules: Dict[str, List[str]], status_lookup: Dict[str, str]) -> Dict[str, List[str]]:
+def resolve_rules_to_ids(status_rules: Dict[str, List[str]], duration_data: dict) -> Dict[str, List[str]]:
     """
-    Convert rules with status names into rules with status IDs.
+    Convert rules with status names into rules with status IDs,
+    using the header of the duration_data response as the source of truth.
     """
+    # Build name → id map from header
+    name_to_id = {c["value"]: c["id"] for c in duration_data.get("table", {}).get("header", {}).get("valueColumns", [])}
+
     resolved = {}
     for bucket, names in status_rules.items():
         ids = []
         for name in names:
-            for sid, sname in status_lookup.items():
-                if sname == name:
-                    ids.append(sid)
+            if name in name_to_id:
+                ids.append(name_to_id[name])
         resolved[bucket] = ids
     return resolved
 
@@ -100,7 +103,7 @@ def resolve_rules_to_ids(status_rules: Dict[str, List[str]], status_lookup: Dict
 def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
     rows = []
     status_lookup = build_status_lookup(duration_data, transition_data)
-    rules_by_id = resolve_rules_to_ids(status_rules, status_lookup)
+    rules_by_id = resolve_rules_to_ids(status_rules, duration_data)
 
     # --- Map transition dates by ID ---
     transition_lookup = {}
