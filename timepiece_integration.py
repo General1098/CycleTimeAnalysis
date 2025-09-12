@@ -17,7 +17,7 @@ def fetch_status_durations(api_key: str, filter_id: str) -> dict:
         "outputType": "json",
         "calendar": "normalHours",
         "multiVisitBehavior": "total",
-        "pageSize": 1000,  # ensure we don't get truncated to 100
+        "pageSize": 1000,
     }
     resp = requests.post(BASE_URL, headers=headers, data=params)
     resp.raise_for_status()
@@ -45,15 +45,15 @@ def fetch_transition_dates(api_key: str, filter_id: str) -> dict:
 def build_status_lookup(*datasets: dict) -> Dict[str, str]:
     """
     Build a merged lookup of status ID -> Name from multiple API datasets.
-    Ensures we capture *all* statuses from all projects, not just the first one.
+    Ensures we capture *all* statuses from all projects.
     """
     lookup = {}
 
     for data in datasets:
         # 1. From includedStatuses
         for st in data.get("includedStatuses", []):
-            name = st.get("name")
             sid = st.get("id")
+            name = st.get("name")
             if sid and name:
                 lookup[sid] = name
 
@@ -65,7 +65,8 @@ def build_status_lookup(*datasets: dict) -> Dict[str, str]:
         # 3. From table body rows
         for row in data.get("table", {}).get("body", {}).get("rows", []):
             for c in row.get("valueColumns", []):
-                lookup[c["id"]] = c.get("value", c["id"])
+                if c.get("id") and c.get("value"):
+                    lookup[c["id"]] = c["value"]
 
     return lookup
 
@@ -81,9 +82,25 @@ def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
     return rules
 
 
+def resolve_rules_to_ids(status_rules: Dict[str, List[str]], status_lookup: Dict[str, str]) -> Dict[str, List[str]]:
+    """
+    Convert rules with status names into rules with status IDs.
+    """
+    resolved = {}
+    for bucket, names in status_rules.items():
+        ids = []
+        for name in names:
+            for sid, sname in status_lookup.items():
+                if sname == name:
+                    ids.append(sid)
+        resolved[bucket] = ids
+    return resolved
+
+
 def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
     rows = []
     status_lookup = build_status_lookup(duration_data, transition_data)
+    rules_by_id = resolve_rules_to_ids(status_rules, status_lookup)
 
     # --- Map transition dates by ID ---
     transition_lookup = {}
@@ -96,7 +113,7 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
         start_date = None
         end_date = None
 
-        # Team-specific IDs
+        # IDs for start and end statuses across projects
         START_IDS = ["10111", "10206", "10499"]  # SM, O, T4
         END_IDS = ["10097", "10207", "10500"]    # SM, O, T4
 
@@ -122,12 +139,10 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
         record = {"Key": issue_key}
         total_days = 0
 
-        for bucket, statuses in status_rules.items():
+        for bucket, ids in rules_by_id.items():
             dur = 0
-            for s in statuses:
-                # Allow both ID and name matches
-                sid = next((k for k, v in status_lookup.items() if v == s), None)
-                if sid and sid in value_cols and value_cols[sid] not in (None, "-", ""):
+            for sid in ids:
+                if sid in value_cols and value_cols[sid] not in (None, "-", ""):
                     try:
                         dur += float(value_cols[sid]) / 86400000.0  # ms → days
                     except Exception:
@@ -141,4 +156,3 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
         rows.append(record)
 
     return pd.DataFrame(rows)
-
