@@ -85,45 +85,51 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
     rows = []
     status_lookup = build_status_lookup(duration_data, transition_data)
 
-    # Map transition dates
+    # --- Map transition dates by ID ---
     transition_lookup = {}
     for row in transition_data.get("table", {}).get("body", {}).get("rows", []):
-        issue_key = next(
-            (c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"),
-            None
-        )
-        cols = {status_lookup.get(c["id"], c["id"]): c.get("value") for c in row.get("valueColumns", [])}
-        start_date = (
-            cols.get("In Development (C7SM)")
-            or cols.get("In Progress (C7O)")
-            or cols.get("In Development (C7T4)")
-        )
-        end_date = (
-            cols.get("Done (C7SM)")
-            or cols.get("Done (C7O)")
-            or cols.get("Done (C7T4)")
-        )
-        transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
-
-    # Durations
-    for row in duration_data.get("table", {}).get("body", {}).get("rows", []):
-        issue_key = next(
-            (c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"),
-            None
-        )
+        issue_key = next((c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"), None)
         if not issue_key:
             continue
 
-        value_cols = {status_lookup.get(c["id"], c["id"]): c.get("raw") for c in row.get("valueColumns", [])}
+        cols = {c["id"]: c.get("value") for c in row.get("valueColumns", [])}
+        start_date = None
+        end_date = None
+
+        # Team-specific IDs
+        START_IDS = ["10111", "10206", "10499"]  # SM, O, T4
+        END_IDS = ["10097", "10207", "10500"]    # SM, O, T4
+
+        for sid in START_IDS:
+            if sid in cols and cols[sid] not in (None, "-", ""):
+                start_date = cols[sid]
+                break
+
+        for sid in END_IDS:
+            if sid in cols and cols[sid] not in (None, "-", ""):
+                end_date = cols[sid]
+                break
+
+        transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
+
+    # --- Durations by ID ---
+    for row in duration_data.get("table", {}).get("body", {}).get("rows", []):
+        issue_key = next((c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"), None)
+        if not issue_key:
+            continue
+
+        value_cols = {c["id"]: c.get("raw") for c in row.get("valueColumns", [])}
         record = {"Key": issue_key}
         total_days = 0
 
         for bucket, statuses in status_rules.items():
             dur = 0
             for s in statuses:
-                if s in value_cols and value_cols[s] not in (None, "-", ""):
+                # Allow both ID and name matches
+                sid = next((k for k, v in status_lookup.items() if v == s), None)
+                if sid and sid in value_cols and value_cols[sid] not in (None, "-", ""):
                     try:
-                        dur += float(value_cols[s]) / 86400000.0  # raw is ms
+                        dur += float(value_cols[sid]) / 86400000.0  # ms → days
                     except Exception:
                         pass
             record[bucket] = dur
@@ -135,3 +141,4 @@ def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Di
         rows.append(record)
 
     return pd.DataFrame(rows)
+
