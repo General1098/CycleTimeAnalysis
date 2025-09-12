@@ -3,6 +3,35 @@ import pandas as pd
 import numpy as np
 import altair as alt
 import sys, os
+import numpy as np
+
+def monte_carlo_forecast(ct_data, num_simulations=10000, items=None, weeks=None):
+    """
+    Run a Monte Carlo simulation.
+    - If items is provided: forecast how long it will take to finish X items.
+    - If weeks is provided: forecast how many items can be delivered in N weeks.
+    """
+    ct_data = ct_data.dropna().values
+    results = []
+
+    if items:
+        for _ in range(num_simulations):
+            samples = np.random.choice(ct_data, size=items, replace=True)
+            results.append(np.sum(samples))
+        return np.percentile(results, [50, 85, 95])  # return durations in days
+
+    elif weeks:
+        horizon_days = weeks * 7
+        for _ in range(num_simulations):
+            days_used = 0
+            delivered = 0
+            while days_used < horizon_days:
+                days_used += np.random.choice(ct_data)
+                if days_used <= horizon_days:
+                    delivered += 1
+            results.append(delivered)
+        return np.percentile(results, [50, 85, 95])  # return items delivered
+
 
 # Ensure local imports work
 sys.path.append(os.path.dirname(__file__))
