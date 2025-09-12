@@ -124,7 +124,7 @@ else:
 st.caption("Cycle Time = Blocked + Development + Review (if present)")
 
 # ===================== TABS =====================
-tabs = st.tabs(["Overview", "Cycle Time", "Slowest Items", "Data"])
+tabs = st.tabs(["Overview", "Cycle Time", "Slowest Items", "Forecasting", "Data"])
 
 # ---------- OVERVIEW ----------
 with tabs[0]:
@@ -190,11 +190,39 @@ with tabs[2]:
         st.info("No data available.")
 
 # ---------- DATA ----------
-with tabs[3]:
+with tabs[4]:
     st.subheader("Data preview")
 
     row_count = len(view_df)
     st.caption(f"Showing all {row_count} rows returned from Timepiece")
 
     st.dataframe(view_df, use_container_width=True)
+
+# ---------- FORECASTING ----------
+with tabs[3]:
+    st.subheader("Monte Carlo Forecasting")
+
+    if view_df.empty or view_df["CT"].dropna().empty:
+        st.info("No CT data available for forecasting.")
+    else:
+        mode = st.radio("Forecast mode", ["How many items in N weeks?", "How long for X items?"], index=0)
+
+        if mode == "How many items in N weeks?":
+            weeks = st.number_input("Weeks", min_value=1, max_value=52, value=4)
+            sims = st.number_input("Simulations", min_value=1000, max_value=50000, value=10000, step=1000)
+            p50, p85, p95 = monte_carlo_forecast(view_df["CT"], num_simulations=sims, weeks=weeks)
+            st.write(f"In {weeks} weeks, forecasted items delivered:")
+            st.write(f"- **50% likely**: {int(p50)} items")
+            st.write(f"- **85% likely**: {int(p85)} items")
+            st.write(f"- **95% likely**: {int(p95)} items")
+
+        else:
+            items = st.number_input("Number of items", min_value=1, max_value=200, value=10)
+            sims = st.number_input("Simulations", min_value=1000, max_value=50000, value=10000, step=1000)
+            p50, p85, p95 = monte_carlo_forecast(view_df["CT"], num_simulations=sims, items=items)
+            st.write(f"To deliver {items} items, forecasted completion time:")
+            st.write(f"- **50% likely**: {p50:.1f} days")
+            st.write(f"- **85% likely**: {p85:.1f} days")
+            st.write(f"- **95% likely**: {p95:.1f} days")
+
 
