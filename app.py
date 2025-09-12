@@ -5,35 +5,6 @@ import altair as alt
 import sys, os
 import datetime
 
-# Monte Carlo Simulation
-def monte_carlo_forecast(ct_data, num_simulations=10000, items=None, weeks=None):
-    """
-    Run a Monte Carlo simulation.
-    - If items is provided: forecast how long it will take to finish X items.
-    - If weeks is provided: forecast how many items can be delivered in N weeks.
-    """
-    ct_data = ct_data.dropna().values
-    results = []
-
-    if items:
-        for _ in range(num_simulations):
-            samples = np.random.choice(ct_data, size=items, replace=True)
-            results.append(np.sum(samples))
-        return np.percentile(results, [50, 85, 95])  # durations in days
-
-    elif weeks:
-        horizon_days = weeks * 7
-        for _ in range(num_simulations):
-            days_used = 0
-            delivered = 0
-            while days_used < horizon_days:
-                days_used += np.random.choice(ct_data)
-                if days_used <= horizon_days:
-                    delivered += 1
-            results.append(delivered)
-        return np.percentile(results, [50, 85, 95])  # items delivered
-
-
 # Ensure local imports work
 sys.path.append(os.path.dirname(__file__))
 
@@ -46,6 +17,7 @@ from timepiece_integration import (
 
 st.set_page_config(page_title="Cycle Time Analysis", layout="wide")
 
+
 # ---- Team detection from issue key ----
 def assign_team(issue_key: str) -> str:
     if issue_key.startswith("C7SM"):
@@ -55,6 +27,29 @@ def assign_team(issue_key: str) -> str:
     elif issue_key.startswith("C7T4"):
         return "Team 4"
     return "Other"
+
+
+# ---- Monte Carlo (throughput based) ----
+def monte_carlo_forecast_throughput(completions_per_week, num_simulations=10000, items=None, weeks=None):
+    results = []
+
+    if items:  # Forecast completion time for X items
+        for _ in range(num_simulations):
+            total_done = 0
+            week_count = 0
+            while total_done < items:
+                total_done += np.random.choice(completions_per_week)
+                week_count += 1
+            results.append(week_count * 7)  # convert to days
+        return np.percentile(results, [50, 85, 95])
+
+    elif weeks:  # Forecast number of items completed in N weeks
+        for _ in range(num_simulations):
+            total_done = 0
+            for _ in range(weeks):
+                total_done += np.random.choice(completions_per_week)
+            results.append(total_done)
+        return np.percentile(results, [50, 85, 95])
 
 
 # ===================== SIDEBAR: SETTINGS =====================
@@ -226,52 +221,62 @@ with tabs[2]:
 
 # ---------- FORECASTING ----------
 with tabs[3]:
-    st.subheader("Monte Carlo Forecasting")
+    st.subheader("Monte Carlo Forecasting (Throughput Based)")
 
-    if view_df.empty or view_df["CT"].dropna().empty:
-        st.info("No CT data available for forecasting.")
+    if view_df.empty or view_df["_bucketer"].dropna().empty:
+        st.info("No completion data available for forecasting.")
     else:
-        mode = st.radio(
-            "Forecast mode",
-            ["How many items in N weeks?", "When will X items be done?"],
-            index=0,
+        # Build throughput history (items per week)
+        throughput = (
+            view_df["_bucketer"]
+            .dropna()
+            .dt.to_period("W")
+            .value_counts()
+            .values
         )
-
-        start_date = st.date_input("Start date", datetime.date.today())
-
-        if mode == "How many items in N weeks?":
-            weeks = st.number_input("Weeks", min_value=1, max_value=52, value=4)
-            sims = st.number_input(
-                "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
-            )
-            p50, p85, p95 = monte_carlo_forecast(
-                view_df["CT"], num_simulations=sims, weeks=weeks
-            )
-            st.write(f"In {weeks} weeks (starting {start_date:%d %b %Y}):")
-            st.write(f"- **50% likely**: {int(p50)} items")
-            st.write(f"- **85% likely**: {int(p85)} items")
-            st.write(f"- **95% likely**: {int(p95)} items")
-
+        if len(throughput) == 0:
+            st.info("Not enough throughput data.")
         else:
-            items = st.number_input(
-                "Number of items", min_value=1, max_value=200, value=10
+            mode = st.radio(
+                "Forecast mode",
+                ["How many items in N weeks?", "When will X items be done?"],
+                index=0,
             )
-            sims = st.number_input(
-                "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
-            )
-            p50, p85, p95 = monte_carlo_forecast(
-                view_df["CT"], num_simulations=sims, items=items
-            )
-            st.write(f"To deliver {items} items (starting {start_date:%d %b %Y}):")
-            st.write(
-                f"- **50% likely**: {(start_date + datetime.timedelta(days=p50)):%d %b %Y}"
-            )
-            st.write(
-                f"- **85% likely**: {(start_date + datetime.timedelta(days=p85)):%d %b %Y}"
-            )
-            st.write(
-                f"- **95% likely**: {(start_date + datetime.timedelta(days=p95)):%d %b %Y}"
-            )
+            start_date = st.date_input("Start date", datetime.date.today())
+
+            if mode == "How many items in N weeks?":
+                weeks = st.number_input("Weeks", min_value=1, max_value=52, value=4)
+                sims = st.number_input(
+                    "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
+                )
+                p50, p85, p95 = monte_carlo_forecast_throughput(
+                    throughput, num_simulations=sims, weeks=weeks
+                )
+                st.write(f"In {weeks} weeks (starting {start_date:%d %b %Y}):")
+                st.write(f"- **50% likely**: {int(p50)} items")
+                st.write(f"- **85% likely**: {int(p85)} items")
+                st.write(f"- **95% likely**: {int(p95)} items")
+
+            else:
+                items = st.number_input(
+                    "Number of items", min_value=1, max_value=200, value=10
+                )
+                sims = st.number_input(
+                    "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
+                )
+                p50, p85, p95 = monte_carlo_forecast_throughput(
+                    throughput, num_simulations=sims, items=items
+                )
+                st.write(f"To deliver {items} items (starting {start_date:%d %b %Y}):")
+                st.write(
+                    f"- **50% likely**: {(start_date + datetime.timedelta(days=p50)):%d %b %Y}"
+                )
+                st.write(
+                    f"- **85% likely**: {(start_date + datetime.timedelta(days=p85)):%d %b %Y}"
+                )
+                st.write(
+                    f"- **95% likely**: {(start_date + datetime.timedelta(days=p95)):%d %b %Y}"
+                )
 
 
 # ---------- DATA ----------
