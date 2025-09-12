@@ -332,10 +332,12 @@ with tabs[4]:
             "Average WIP Age (days)",
             round(wip_items["Age (days)"].mean(), 1) if not wip_items.empty else "--",
         )
-        col3.metric(
-            "Oldest WIP (days)",
-            int(wip_items["Age (days)"].max()) if not wip_items.empty else "--",
-        )
+        oldest_wip = wip_items["Age (days)"].max()
+        if pd.isna(oldest_wip):
+            col3.metric("Oldest WIP (days)", "--")
+        else:
+            col3.metric("Oldest WIP (days)", int(oldest_wip))
+
 
         # Risk check: items older than 85th percentile of historical CT
         if "CT" in raw and not raw["CT"].dropna().empty:
