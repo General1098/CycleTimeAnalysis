@@ -8,7 +8,7 @@ BASE_URL = "https://tis.obss.io/rest/list2"
 def fetch_status_durations(api_key: str, filter_id: str) -> dict:
     headers = {
         "Authorization": f"TISJWT {api_key}",
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
     params = {
         "filterType": "jqlfilter",
@@ -17,6 +17,7 @@ def fetch_status_durations(api_key: str, filter_id: str) -> dict:
         "outputType": "json",
         "calendar": "normalHours",
         "multiVisitBehavior": "total",
+        "pageSize": 1000,
     }
     resp = requests.post(BASE_URL, headers=headers, data=params)
     resp.raise_for_status()
@@ -26,7 +27,7 @@ def fetch_status_durations(api_key: str, filter_id: str) -> dict:
 def fetch_transition_dates(api_key: str, filter_id: str) -> dict:
     headers = {
         "Authorization": f"TISJWT {api_key}",
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
     params = {
         "filterType": "jqlfilter",
@@ -34,10 +35,40 @@ def fetch_transition_dates(api_key: str, filter_id: str) -> dict:
         "columnsBy": "firstTransitionToStatusDate",
         "outputType": "json",
         "calendar": "normalHours",
+        "pageSize": 1000,
     }
     resp = requests.post(BASE_URL, headers=headers, data=params)
     resp.raise_for_status()
     return resp.json()
+
+
+def build_status_lookup(*datasets: dict) -> Dict[str, str]:
+    """
+    Build a merged lookup of status ID -> Name from multiple API datasets.
+    Ensures we capture *all* statuses from all projects.
+    """
+    lookup = {}
+
+    for data in datasets:
+        # 1. From includedStatuses
+        for st in data.get("includedStatuses", []):
+            sid = st.get("id")
+            name = st.get("name")
+            if sid and name:
+                lookup[sid] = name
+
+        # 2. From table header
+        header = data.get("table", {}).get("header", {})
+        for c in header.get("valueColumns", []):
+            lookup[c["id"]] = c["value"]
+
+        # 3. From table body rows
+        for row in data.get("table", {}).get("body", {}).get("rows", []):
+            for c in row.get("valueColumns", []):
+                if c.get("id") and c.get("value"):
+                    lookup[c["id"]] = c["value"]
+
+    return lookup
 
 
 def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
@@ -51,70 +82,72 @@ def parse_status_rules(rules_text: str) -> Dict[str, List[str]]:
     return rules
 
 
-def build_dataframe(
-    duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]
-) -> pd.DataFrame:
-    rows = []
+def resolve_rules_to_ids(status_rules: Dict[str, List[str]], duration_data: dict) -> Dict[str, List[str]]:
+    """
+    Convert rules with status names into rules with status IDs,
+    using the header of the duration_data response as the source of truth.
+    """
+    # Build name → id map from header
+    name_to_id = {c["value"]: c["id"] for c in duration_data.get("table", {}).get("header", {}).get("valueColumns", [])}
 
-    # --- Map transition dates (Start & End) ---
+    resolved = {}
+    for bucket, names in status_rules.items():
+        ids = []
+        for name in names:
+            if name in name_to_id:
+                ids.append(name_to_id[name])
+        resolved[bucket] = ids
+    return resolved
+
+
+def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
+    rows = []
+    status_lookup = build_status_lookup(duration_data, transition_data)
+    rules_by_id = resolve_rules_to_ids(status_rules, duration_data)
+
+    # --- Map transition dates by ID ---
     transition_lookup = {}
     for row in transition_data.get("table", {}).get("body", {}).get("rows", []):
-        issue_key = next(
-            (c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"),
-            None,
-        )
-        cols = {c["id"]: c.get("value") for c in row.get("valueColumns", [])}
-
-        start_date = (
-            cols.get("In Development (C7SM)")
-            or cols.get("In Progress (C7O)")
-            or cols.get("In Development (C7T4)")
-        )
-        end_date = (
-            cols.get("Done (C7SM)")
-            or cols.get("Done (C7O)")
-            or cols.get("Done (C7T4)")
-        )
-
-        transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
-
-    # --- Durations & Current Status ---
-    for row in duration_data.get("table", {}).get("body", {}).get("rows", []):
-        issue_key = next(
-            (c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"),
-            None,
-        )
+        issue_key = next((c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"), None)
         if not issue_key:
             continue
 
-        # Collect duration values
+        cols = {c["id"]: c.get("value") for c in row.get("valueColumns", [])}
+        start_date = None
+        end_date = None
+
+        # IDs for start and end statuses across projects
+        START_IDS = ["10111", "10206", "10499"]  # SM, O, T4
+        END_IDS = ["10097", "10207", "10500"]    # SM, O, T4
+
+        for sid in START_IDS:
+            if sid in cols and cols[sid] not in (None, "-", ""):
+                start_date = cols[sid]
+                break
+
+        for sid in END_IDS:
+            if sid in cols and cols[sid] not in (None, "-", ""):
+                end_date = cols[sid]
+                break
+
+        transition_lookup[issue_key] = {"Start": start_date, "End": end_date}
+
+    # --- Durations by ID ---
+    for row in duration_data.get("table", {}).get("body", {}).get("rows", []):
+        issue_key = next((c["value"] for c in row.get("headerColumns", []) if c["id"] == "issuekey"), None)
+        if not issue_key:
+            continue
+
         value_cols = {c["id"]: c.get("raw") for c in row.get("valueColumns", [])}
-
-        # Determine the most recent "current status"
-        current_status = None
-        if "currentState" in row:
-            try:
-                status_id = row["currentState"][0].get("id")
-                # Map ID back to human-readable name if possible
-                for col in row.get("valueColumns", []):
-                    if col.get("id") == status_id:
-                        current_status = col.get("value", status_id)
-                        break
-                if not current_status:  # fallback if not mapped
-                    current_status = status_id
-            except Exception:
-                current_status = None
-
-        record = {"Key": issue_key, "CurrentStatus": current_status}
+        record = {"Key": issue_key}
         total_days = 0
 
-        # Apply bucket rules
-        for bucket, statuses in status_rules.items():
+        for bucket, ids in rules_by_id.items():
             dur = 0
-            for s in statuses:
-                if s in value_cols and value_cols[s] not in (None, "-", ""):
+            for sid in ids:
+                if sid in value_cols and value_cols[sid] not in (None, "-", ""):
                     try:
-                        dur += float(value_cols[s]) / 86400000.0  # ms → days
+                        dur += float(value_cols[sid]) / 86400000.0  # ms → days
                     except Exception:
                         pass
             record[bucket] = dur
