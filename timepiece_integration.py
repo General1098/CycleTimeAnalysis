@@ -99,21 +99,6 @@ def resolve_rules_to_ids(status_rules: Dict[str, List[str]], duration_data: dict
         resolved[bucket] = ids
     return resolved
 
-def format_days(days: float) -> str:
-    if pd.isna(days):
-        return "-"
-    total_minutes = int(days * 24 * 60)
-    d, rem = divmod(total_minutes, 1440)
-    h, m = divmod(rem, 60)
-    parts = []
-    if d > 0:
-        parts.append(f"{d}d")
-    if h > 0:
-        parts.append(f"{h}h")
-    if d == 0 and m > 0:  # only show minutes for < 1 day
-        parts.append(f"{m}m")
-    return " ".join(parts) if parts else "0d"
-
 
 def build_dataframe(duration_data: dict, transition_data: dict, status_rules: Dict[str, List[str]]) -> pd.DataFrame:
     rows = []
