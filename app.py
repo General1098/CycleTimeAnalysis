@@ -153,8 +153,6 @@ with tabs[0]:
     col1.metric("Average CT (days)", "--" if np.isnan(avg_ct) else avg_ct)
     col2.metric("85th Percentile CT (days)", "--" if np.isnan(p85_ct) else p85_ct)
     col3.metric("Items this month", items_this_month)
-    col4.metric("Story CT (median days)", "--" if np.isnan(story_med) else story_med)
-    col5.metric("Bug CT (median days)", "--" if np.isnan(bug_med) else bug_med)
 
     st.divider()
     
