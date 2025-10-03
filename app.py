@@ -150,15 +150,6 @@ with tabs[0]:
     else:
         items_this_month = 0
 
-    # Story / Bug CT (median, view-only)
-    story_med = np.nan
-    bug_med = np.nan
-    if "IssueType" in view_df.columns and "CT" in view_df.columns:
-        story = view_df.loc[view_df["IssueType"] == "Story", "CT"]
-        bug = view_df.loc[view_df["IssueType"] == "Bug", "CT"]
-        story_med = round(story.median(), 2) if story.notna().any() else np.nan
-        bug_med = round(bug.median(), 2) if bug.notna().any() else np.nan
-
     col1.metric("Average CT (days)", "--" if np.isnan(avg_ct) else avg_ct)
     col2.metric("85th Percentile CT (days)", "--" if np.isnan(p85_ct) else p85_ct)
     col3.metric("Items this month", items_this_month)
