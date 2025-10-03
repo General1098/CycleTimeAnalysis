@@ -150,8 +150,8 @@ with tabs[0]:
     else:
         items_this_month = 0
 
-    col1.metric("Average CT (days)", "--" if np.isnan(avg_ct) else avg_ct)
-    col2.metric("85th Percentile CT (days)", "--" if np.isnan(p85_ct) else p85_ct)
+    col1.metric("Average CT (overall)", "--" if np.isnan(avg_ct) else avg_ct)
+    col2.metric("85th Percentile CT (overall)", "--" if np.isnan(p85_ct) else p85_ct)
     col3.metric("Items this month", items_this_month)
 
     st.divider()
