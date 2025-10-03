@@ -136,21 +136,6 @@ tabs = st.tabs(["Cycle Time", "Slowest Items", "Forecasting", "Data", "Sprint An
 
 with tabs[0]:
     
-    # ---- Merged Overview & Insights (view-only) ----
-    st.subheader("Cycle Time — Overview & Insights" + ("" if selected_team == "All Teams" else f" — {selected_team}"))
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    avg_ct = round(view_df["CT"].mean(), 2) if "CT" in view_df.columns and view_df["CT"].notna().any() else np.nan
-    p85_ct = round(view_df["CT"].quantile(0.85), 2) if "CT" in view_df.columns and view_df["CT"].notna().any() else np.nan
-
-    if "_bucketer" in view_df.columns and view_df["_bucketer"].notna().any():
-        _vc = (
-            view_df["_bucketer"].dropna().dt.to_period("M").value_counts().sort_index()
-        )
-        items_this_month = int(_vc.iloc[-1]) if len(_vc) else 0
-    else:
-        items_this_month = 0
-
     # Story / Bug CT (median, view-only)
     story_med = np.nan
     bug_med = np.nan
