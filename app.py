@@ -134,39 +134,6 @@ tabs = st.tabs(["Cycle Time", "Slowest Items", "Forecasting", "Data", "Sprint An
 
 # ---------- OVERVIEW ----------
 
-with tabs[0]:
-    
-    # ---- Merged Overview & Insights (view-only) ----
-    st.subheader("Cycle Time — Overview & Insights" + ("" if selected_team == "All Teams" else f" — {selected_team}"))
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    avg_ct = round(view_df["CT"].mean(), 2) if "CT" in view_df.columns and view_df["CT"].notna().any() else np.nan
-    p85_ct = round(view_df["CT"].quantile(0.85), 2) if "CT" in view_df.columns and view_df["CT"].notna().any() else np.nan
-
-    if "_bucketer" in view_df.columns and view_df["_bucketer"].notna().any():
-        _vc = (
-            view_df["_bucketer"].dropna().dt.to_period("M").value_counts().sort_index()
-        )
-        items_this_month = int(_vc.iloc[-1]) if len(_vc) else 0
-    else:
-        items_this_month = 0
-
-    # Story / Bug CT (median, view-only)
-    story_med = np.nan
-    bug_med = np.nan
-    if "IssueType" in view_df.columns and "CT" in view_df.columns:
-        story = view_df.loc[view_df["IssueType"] == "Story", "CT"]
-        bug = view_df.loc[view_df["IssueType"] == "Bug", "CT"]
-        story_med = round(story.median(), 2) if story.notna().any() else np.nan
-        bug_med = round(bug.median(), 2) if bug.notna().any() else np.nan
-
-    col1.metric("Average CT (days)", "--" if np.isnan(avg_ct) else avg_ct)
-    col2.metric("85th Percentile CT (days)", "--" if np.isnan(p85_ct) else p85_ct)
-    col3.metric("Items this month", items_this_month)
-    col4.metric("Story CT (median days)", "--" if np.isnan(story_med) else story_med)
-    col5.metric("Bug CT (median days)", "--" if np.isnan(bug_med) else bug_med)
-
-    st.divider()
     with tabs[0]:
         st.subheader("Cycle Time Trends")
 
