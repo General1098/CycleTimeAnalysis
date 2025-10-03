@@ -294,41 +294,8 @@ with tabs[0]:
                 chart = (area + line)
             st.empty()  # legacy chart removed; st.altair_chart(chart.properties(height=380), use_container_width=True)
 
-    if "_bucketer" in view_df.columns and view_df["_bucketer"].notna().any():
-        roll = (
-            view_df.groupby(view_df["_bucketer"].dt.to_period("M"))
-            .agg(
-                avg=("CT", "mean"),
-                p85=("CT", lambda s: s.quantile(0.85)),
-                items=("CT", "count"),
-            )
-            .reset_index()
-        )
-        roll["_bucketer"] = roll["_bucketer"].dt.to_timestamp()
-
-        base = alt.Chart(roll).encode(
-            x=alt.X("_bucketer:T", title="Month", sort="ascending")
-        )
-        st.empty()  # legacy chart removed; st.altair_chart(
-            base.mark_line(point=True).encode(y=alt.Y("avg:Q", title="Average CT (days)")),
-            use_container_width=True,
-        )
-        st.empty()  # legacy chart removed; st.altair_chart(
-            base.mark_line(point=True).encode(
-                y=alt.Y("p85:Q", title="85th CT (days)")
-            ),
-            use_container_width=True,
-        )
-        st.empty()  # legacy chart removed; st.altair_chart(
-            base.mark_bar().encode(y=alt.Y("items:Q", title="Item Count")),
-            use_container_width=True,
-        )
-    else:
-        st.info("No valid transition dates found for bucketing.")
-
-
 # ---------- SLOWEST ITEMS ----------
-with tabs[0]:
+with tabs[1]:
     st.subheader("Slowest Items")
     if not view_df.empty:
         th = view_df["_bucketer"].dt.to_period("M")
@@ -350,7 +317,7 @@ with tabs[0]:
 
 
 # ---------- FORECASTING ----------
-with tabs[0]:
+with tabs[2]:
     st.subheader("Monte Carlo Forecasting (Throughput Based)")
 
     if view_df.empty or view_df["_bucketer"].dropna().empty:
@@ -448,7 +415,7 @@ with tabs[0]:
 
 
 # ---------- DATA ----------
-with tabs[0]:
+with tabs[3]:
     st.subheader("Data preview")
 
     row_count = len(view_df)
