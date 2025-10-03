@@ -349,7 +349,6 @@ with tabs[0]:
 
 with tabs[1]:
     # ---------- SLOWEST ITEMS ----------
-    with tabs[0]:
         st.subheader("Slowest Items")
         if not view_df.empty:
             th = view_df["_bucketer"].dt.to_period("M")
@@ -372,7 +371,6 @@ with tabs[1]:
 
 with tabs[2]:
     # ---------- FORECASTING ----------
-    with tabs[0]:
         st.subheader("Monte Carlo Forecasting (Throughput Based)")
 
         if view_df.empty or view_df["_bucketer"].dropna().empty:
