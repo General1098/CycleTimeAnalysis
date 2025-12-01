@@ -559,7 +559,7 @@ if sprint_tab is not None:
 
                 # Compute Sprint-level 85th CT
                 sprint_items = expanded[expanded["Sprint"] == spr]
-                if not sprint_items.empty:
+                if not sprint_items.empty and "CT" in sprint_items.columns:
                     sprint_p85 = sprint_items["CT"].quantile(0.85)
                     sprint_p85_text = f" • 85th CT: {sprint_p85:.1f} days"
                 else:
@@ -580,15 +580,47 @@ if sprint_tab is not None:
                     g["Percent"] = g["Percent"].round(1)
 
                     # Compute per-IssueType P85 CT
-                    p85_by_type = sprint_items.groupby("IssueType")["CT"].quantile(0.85)
+                    if not sprint_items.empty and "CT" in sprint_items.columns:
+                        p85_by_type = sprint_items.groupby("IssueType")["CT"].quantile(0.85)
+                    else:
+                        p85_by_type = {}
 
                     # Add column for display
                     g = g.copy()
                     g["85th CT (days)"] = g["IssueType"].map(p85_by_type).round(2)
 
-                    # Display table
+                    # Summary table
                     st.dataframe(
                         g[["IssueType", "Count", "Percent", "85th CT (days)"]].reset_index(drop=True),
                         use_container_width=True,
                     )
 
+                    # ---- Items-by-IssueType drilldown ----
+                    st.markdown("**Items by Issue Type**")
+
+                    # Only proceed if we have Keys
+                    has_key_col = "Key" in sprint_items.columns
+
+                    for itype in g["IssueType"].unique():
+                        sub_items = sprint_items[sprint_items["IssueType"] == itype].copy()
+                        if sub_items.empty:
+                            continue
+
+                        title = f"{itype} ({len(sub_items)} items)"
+                        with st.expander(title):
+                            cols_to_show = []
+                            if has_key_col:
+                                cols_to_show.append("Key")
+                            for col in ["IssueType", "CT", "Start", "End"]:
+                                if col in sub_items.columns:
+                                    cols_to_show.append(col)
+
+                            if cols_to_show:
+                                st.dataframe(
+                                    sub_items[cols_to_show]
+                                        .sort_values("CT", ascending=False)
+                                        .reset_index(drop=True),
+                                    use_container_width=True,
+                                )
+                            else:
+                                st.info("No item-level columns available to display for this sprint.")
