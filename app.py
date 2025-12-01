@@ -173,7 +173,12 @@ with tabs[0]:
             d["completed_date"] = d["completed_date"].dt.tz_convert(tz)
     
             # Monthly
-            d["month"] = d["completed_date"].dt.to_period("M").dt.to_timestamp().dt.tz_localize(tz)
+            d["month"] = (
+                d["completed_date"]
+                .dt.to_period("M")
+                .dt.to_timestamp("M")  # month-end for clearer labelling
+                .dt.tz_localize(tz)
+            )
             monthly = (
                 d.groupby("month", as_index=False)
                  .agg(mean_ct=("cycle_time_days", "mean"),
@@ -190,7 +195,13 @@ with tabs[0]:
             # Monthly type breakdown for tooltip
             if "IssueType" in d.columns:
                 mt = (
-                    d.groupby([d["completed_date"].dt.to_period("M").dt.to_timestamp().dt.tz_localize(tz), "IssueType"])
+                    d.groupby([
+                    d["completed_date"]
+                    .dt.to_period("M")
+                    .dt.to_timestamp("M")
+                    .dt.tz_localize(tz),
+                    "IssueType",
+                ])
                      .size()
                      .unstack(fill_value=0)
                 )
