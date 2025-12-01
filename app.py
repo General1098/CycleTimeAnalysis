@@ -598,8 +598,8 @@ if sprint_tab is not None:
                     # ---- Items-by-IssueType drilldown ----
                     st.markdown("**Items by Issue Type**")
 
-                    # Only proceed if we have Keys
                     has_key_col = "Key" in sprint_items.columns
+                    has_summary_col = "Summary" in sprint_items.columns
 
                     for itype in g["IssueType"].unique():
                         sub_items = sprint_items[sprint_items["IssueType"] == itype].copy()
@@ -608,11 +608,16 @@ if sprint_tab is not None:
 
                         title = f"{itype} ({len(sub_items)} items)"
                         with st.expander(title):
+                            # Build columns in preferred order: Key, Summary, IssueType, CT, Start, End
                             cols_to_show = []
+
                             if has_key_col:
                                 cols_to_show.append("Key")
+                            if has_summary_col:
+                                cols_to_show.append("Summary")
+
                             for col in ["IssueType", "CT", "Start", "End"]:
-                                if col in sub_items.columns:
+                                if col in sub_items.columns and col not in cols_to_show:
                                     cols_to_show.append(col)
 
                             if cols_to_show:
