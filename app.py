@@ -492,70 +492,102 @@ except Exception:
 
 if sprint_tab is not None:
     with sprint_tab:
-        with tabs[4]:
-            st.subheader("Sprint Analysis")
+    st.subheader("Sprint Analysis")
 
-            df_src = view_df if 'view_df' in globals() else (df if 'df' in globals() else None)
-            if df_src is None or df_src.empty or "Sprint" not in df_src.columns or "IssueType" not in df_src.columns:
-                st.info("No sprint/issue type data available.")
-            else:
-                expanded = df_src.copy()
-                expanded["Sprint"] = expanded["Sprint"].fillna("")
-                expanded = expanded.assign(Sprint=expanded["Sprint"].astype(str).str.split(","))
-                expanded = expanded.explode("Sprint")
-                expanded["Sprint"] = expanded["Sprint"].astype(str).str.strip()
-                expanded = expanded[expanded["Sprint"] != ""]
+    df_src = view_df if 'view_df' in globals() else (df if 'df' in globals() else None)
+    if df_src is None or df_src.empty or "Sprint" not in df_src.columns or "IssueType" not in df_src.columns:
+        st.info("No sprint/issue type data available.")
+    else:
+        # Split multi-sprint entries
+        expanded = df_src.copy()
+        expanded["Sprint"] = expanded["Sprint"].fillna("")
+        expanded = expanded.assign(Sprint=expanded["Sprint"].astype(str).split(","))
+        expanded = expanded.explode("Sprint")
+        expanded["Sprint"] = expanded["Sprint"].astype(str).str.strip()
+        expanded = expanded[expanded["Sprint"] != ""]
 
-                if expanded.empty:
-                    st.info("No sprint data after expansion.")
+        if expanded.empty:
+            st.info("No sprint data after expansion.")
+        else:
+            # Convert End dates for ordering
+            end_col = "End" if "End" in expanded.columns else ("Resolved" if "Resolved" in expanded.columns else None)
+            expanded["_enddate"] = pd.to_datetime(expanded[end_col], errors="coerce") if end_col else pd.NaT
+
+            # Order sprints from latest to oldest
+            sprint_order = (
+                expanded.groupby("Sprint")["_enddate"]
+                .max()
+                .sort_values(ascending=False)
+                .index.tolist()
+            )
+
+            expanded["IssueType"] = expanded["IssueType"].fillna("Unknown")
+
+            # Basic counts
+            grouped = expanded.groupby(["Sprint", "IssueType"]).size().reset_index(name="Count")
+            totals = expanded.groupby("Sprint").size().reset_index(name="Total")
+            merged = pd.merge(grouped, totals, on="Sprint", how="left")
+            merged["Percent"] = (merged["Count"] / merged["Total"] * 100)
+
+            # Issue type ordering
+            ORDER = {"Story": 0, "Bug": 1, "Spike": 2, "Task": 3}
+
+            # Compact sprint % summary
+            def make_compact(group):
+                d = dict(zip(group["IssueType"], group["Percent"]))
+                parts = []
+                for it in ["Story", "Bug", "Spike", "Task"]:
+                    if it in d:
+                        parts.append(f"{it}: {d[it]:.0f}%")
+                # Include any additional types
+                extras = sorted([k for k in d.keys() if k not in ORDER])
+                for it in extras:
+                    parts.append(f"{it}: {d[it]:.0f}%")
+                return ", ".join(parts)
+
+            compact = (
+                merged.groupby("Sprint")
+                      .apply(make_compact)
+                      .rename("Composition")
+                      .reindex(sprint_order)
+            )
+
+            st.markdown("**Sprint breakdown — click a sprint to expand**")
+
+            # ---- LOOP THROUGH EACH SPRINT ----
+            for spr in sprint_order:
+
+                # Compute Sprint-level 85th CT
+                sprint_items = expanded[expanded["Sprint"] == spr]
+                if not sprint_items.empty:
+                    sprint_p85 = sprint_items["CT"].quantile(0.85)
+                    sprint_p85_text = f" • 85th CT: {sprint_p85:.1f} days"
                 else:
-                    end_col = "End" if "End" in expanded.columns else ("Resolved" if "Resolved" in expanded.columns else None)
-                    expanded["_enddate"] = pd.to_datetime(expanded[end_col], errors="coerce") if end_col else pd.NaT
+                    sprint_p85_text = ""
 
-                    sprint_order = (
-                        expanded.groupby("Sprint")["_enddate"]
-                        .max()
-                        .sort_values(ascending=False)
-                        .index.tolist()
+                # Sprint header
+                label = f"{spr} — {compact.get(spr, '')}{sprint_p85_text}"
+
+                # EXPANDER BLOCK
+                with st.expander(label):
+                    spr_total = int(totals[totals["Sprint"] == spr]["Total"].iloc[0]) if spr in totals["Sprint"].values else 0
+                    st.caption(f"Total items: {spr_total}")
+
+                    # Filter sprint items and sort IssueTypes
+                    g = merged[merged["Sprint"] == spr].copy()
+                    g["order_key"] = g["IssueType"].map(ORDER).fillna(99)
+                    g = g.sort_values(["order_key", "IssueType"]).drop(columns=["order_key"])
+                    g["Percent"] = g["Percent"].round(1)
+
+                    # Compute per-IssueType P85 CT
+                    p85_by_type = sprint_items.groupby("IssueType")["CT"].quantile(0.85)
+
+                    # Add column for display
+                    g = g.copy()
+                    g["85th CT (days)"] = g["IssueType"].map(p85_by_type).round(2)
+
+                    # Display table
+                    st.dataframe(
+                        g[["IssueType", "Count", "Percent", "85th CT (days)"]].reset_index(drop=True),
+                        use_container_width=True,
                     )
-
-                    expanded["IssueType"] = expanded["IssueType"].fillna("Unknown")
-                    grouped = expanded.groupby(["Sprint", "IssueType"]).size().reset_index(name="Count")
-                    totals = expanded.groupby("Sprint").size().reset_index(name="Total")
-                    merged = pd.merge(grouped, totals, on="Sprint", how="left")
-                    merged["Percent"] = (merged["Count"] / merged["Total"] * 100)
-
-                    # Fixed order for compact summary
-                    ORDER = {"Story": 0, "Bug": 1, "Spike": 2, "Task": 3}
-                    def make_compact(group):
-                        d = dict(zip(group["IssueType"], group["Percent"]))
-                        parts = []
-                        for it in ["Story", "Bug", "Spike", "Task"]:
-                            if it in d:
-                                parts.append(f"{it}: {d[it]:.0f}%")
-                        # append any other types, alphabetically
-                        extras = sorted([k for k in d.keys() if k not in ORDER])
-                        for it in extras:
-                            parts.append(f"{it}: {d[it]:.0f}%")
-                        return ", ".join(parts)
-
-                    compact = (
-                        merged.groupby("Sprint")
-                              .apply(make_compact)
-                              .rename("Composition")
-                              .reindex(sprint_order)
-                    )
-
-                    st.markdown("**Sprint breakdown — click a sprint to expand**")
-                    for spr in sprint_order:
-                        label = f"{spr} — {compact.get(spr, '') if hasattr(compact, 'get') else compact.loc[spr] if spr in compact.index else ''}"
-                        with st.expander(label):
-                            spr_total = int(totals[totals["Sprint"] == spr]["Total"].iloc[0]) if spr in totals["Sprint"].values else 0
-                            st.caption(f"Total items: {spr_total}")
-
-                            g = merged[merged["Sprint"] == spr].copy()
-                            # Sort rows in the drilldown by the same fixed order (others at the end A-Z)
-                            g["order_key"] = g["IssueType"].map(ORDER).fillna(99)
-                            g = g.sort_values(["order_key", "IssueType"]).drop(columns=["order_key"])
-                            g["Percent"] = g["Percent"].round(1)
-                            st.dataframe(g[["IssueType", "Count", "Percent"]].reset_index(drop=True), use_container_width=True)
