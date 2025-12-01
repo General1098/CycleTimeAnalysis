@@ -492,7 +492,7 @@ except Exception:
 
 if sprint_tab is not None:
     with sprint_tab:
-    st.subheader("Sprint Analysis")
+                st.subheader("Sprint Analysis")
 
     df_src = view_df if 'view_df' in globals() else (df if 'df' in globals() else None)
     if df_src is None or df_src.empty or "Sprint" not in df_src.columns or "IssueType" not in df_src.columns:
@@ -501,7 +501,7 @@ if sprint_tab is not None:
         # Split multi-sprint entries
         expanded = df_src.copy()
         expanded["Sprint"] = expanded["Sprint"].fillna("")
-        expanded = expanded.assign(Sprint=expanded["Sprint"].astype(str).split(","))
+        expanded = expanded.assign(Sprint=expanded["Sprint"].astype(str).str.split(","))
         expanded = expanded.explode("Sprint")
         expanded["Sprint"] = expanded["Sprint"].astype(str).str.strip()
         expanded = expanded[expanded["Sprint"] != ""]
@@ -591,3 +591,4 @@ if sprint_tab is not None:
                         g[["IssueType", "Count", "Percent", "85th CT (days)"]].reset_index(drop=True),
                         use_container_width=True,
                     )
+
