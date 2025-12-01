@@ -189,8 +189,14 @@ with tabs[0]:
                  .reset_index(drop=True)
             )
             now_tz = pd.Timestamp.now(tz=tz)
-            current_month_start = pd.Timestamp(year=now_tz.year, month=now_tz.month, day=1, tz=now_tz.tz)
-            monthly["is_current_month"] = monthly["month"] == current_month_start
+
+            # Use end-of-month (to match the month-end we store in `monthly["month"]`)
+            current_month_end = (
+                pd.Timestamp(year=now_tz.year, month=now_tz.month, day=1, tz=now_tz.tz)
+                + pd.offsets.MonthEnd(0)
+            )
+
+            monthly["is_current_month"] = monthly["month"] == current_month_end
     
             # Monthly type breakdown for tooltip
             if "IssueType" in d.columns:
