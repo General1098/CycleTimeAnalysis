@@ -681,7 +681,12 @@ with tabs[5]:
 
         # Preview
         st.markdown("### Context Data Preview")
-        st.dataframe(ctx_df, use_container_width=True)
+        ctx_df = st.data_editor(
+            ctx_df,
+            num_rows="dynamic",
+            use_container_width=True
+        )
+
 
         # ======= CHART: CT + event overlays =======
         st.markdown("### Cycle Time with Context Overlays")
