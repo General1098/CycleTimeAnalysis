@@ -129,8 +129,14 @@ st.caption("Cycle Time = Blocked + Development + Review (if present)")
 
 
 # ===================== TABS =====================
-tabs = st.tabs(["Cycle Time", "Slowest Items", "Forecasting", "Data", "Sprint Analysis"])
-
+tabs = st.tabs([
+    "Cycle Time",
+    "Slowest Items",
+    "Forecasting",
+    "Data",
+    "Sprint Analysis",
+    "Context"     # <- new tab
+])
 
 # ---------- OVERVIEW ----------
 with tabs[0]:
@@ -486,7 +492,7 @@ with tabs[3]:
 
 # ---------- SPRINT ANALYSIS ----------
 try:
-    sprint_tab = tabs[-1]
+    sprint_tab = tabs[4]   # index 4 = Sprint Analysis
 except Exception:
     sprint_tab = None
 
@@ -629,3 +635,130 @@ if sprint_tab is not None:
                                 )
                             else:
                                 st.info("No item-level columns available to display for this sprint.")
+
+# ====================== CONTEXT / LEADERSHIP TAB ======================
+with tabs[5]:
+    st.subheader("Business Context & Leadership View")
+    st.caption("Overlay cycle time with business context like people moves, holidays, and major project periods.")
+
+    st.markdown("""
+    **How to use this section**
+    1. Create a CSV with at least:
+       - `team`
+       - `start_date`
+    2. Optional columns:
+       - `end_date`
+       - `event_type`
+       - `who`
+       - `description`
+    3. Upload it below.
+    4. Select a team at the top of the app.
+    """)
+
+    ctx_file = st.file_uploader("Upload context events CSV", type="csv")
+
+    if ctx_file is None:
+        st.info("Upload a CSV to display context overlays.")
+    else:
+        # Load CSV
+        ctx = pd.read_csv(ctx_file)
+
+        # Normalise lower case
+        cols = {c.lower().strip(): c for c in ctx.columns}
+
+        def find_col(options):
+            for opt in options:
+                if opt in cols:
+                    return cols[opt]
+            return None
+
+        team_col = find_col(["team", "squad"])
+        start_col = find_col(["start_date", "start"])
+        end_col = find_col(["end_date", "end"])
+        type_col = find_col(["event_type", "type"])
+        who_col = find_col(["who", "person"])
+        desc_col = find_col(["description", "details", "note"])
+
+        if team_col is None or start_col is None:
+            st.error("CSV must contain at least 'team' and 'start_date' columns.")
+            st.stop()
+
+        # Build context DF
+        ctx_df = pd.DataFrame()
+        ctx_df["Team"] = ctx[team_col].astype(str)
+        ctx_df["Start"] = pd.to_datetime(ctx[start_col], errors="coerce")
+        ctx_df["End"] = pd.to_datetime(ctx[end_col], errors="coerce") if end_col else pd.NaT
+        ctx_df["EventType"] = ctx[type_col].astype(str) if type_col else "Event"
+        ctx_df["Who"] = ctx[who_col].astype(str) if who_col else ""
+        ctx_df["Description"] = ctx[desc_col].astype(str) if desc_col else ""
+
+        ctx_df = ctx_df.dropna(subset=["Start"])
+
+        # Preview
+        st.markdown("### Context Data Preview")
+        st.dataframe(ctx_df, use_container_width=True)
+
+        # ======= CHART: CT + event overlays =======
+        st.markdown("### Cycle Time with Context Overlays")
+
+        if selected_team == "All Teams":
+            st.info("Please select a specific Team at the top.")
+        else:
+            team_ctx = ctx_df[ctx_df["Team"] == selected_team]
+
+            if team_ctx.empty:
+                st.info(f"No context events found for {selected_team}.")
+            else:
+                # Build monthly CT series using your existing column names
+                if "End" in view_df.columns and "CT" in view_df.columns:
+                    temp = view_df.dropna(subset=["End", "CT"]).copy()
+                    temp["Month"] = pd.to_datetime(temp["End"]).dt.to_period("M").dt.to_timestamp()
+
+                    monthly = temp.groupby("Month", as_index=False).agg(
+                        median_ct=("CT", "median"),
+                        p85_ct=("CT", lambda x: x.quantile(0.85)),
+                        count=("CT", "count")
+                    )
+
+                    base = alt.Chart(monthly).encode(
+                        x=alt.X("Month:T", title="Month")
+                    )
+
+                    ct_line = base.mark_line(point=True).encode(
+                        y=alt.Y("median_ct:Q", title="Median CT (days)"),
+                        tooltip=["Month:T", "median_ct:Q", "count:Q"]
+                    )
+
+                    event_marks = alt.Chart(team_ctx).mark_rule(
+                        strokeDash=[4, 4], size=2
+                    ).encode(
+                        x="Start:T",
+                        color="EventType:N",
+                        tooltip=["EventType:N", "Who:N", "Description:N", "Start:T", "End:T"]
+                    )
+
+                    st.altair_chart(ct_line + event_marks, use_container_width=True)
+
+                # ===== TIMELINE LIST =====
+                st.markdown("### Context Timeline")
+                for _, r in team_ctx.sort_values("Start").iterrows():
+                    st.markdown(
+                        f"**{r['Start'].date()} — {r['EventType']}** "
+                        f"{'('+r['Who']+')' if r['Who'] else ''}  \n"
+                        f"{r['Description']}"
+                    )
+
+        # ======= HEATMAP =======
+        st.markdown("### Context Load Heatmap (All Teams)")
+
+        ctx_df["Month"] = ctx_df["Start"].dt.to_period("M").dt.to_timestamp()
+        heat = ctx_df.groupby(["Team", "Month"]).size().reset_index(name="Events")
+
+        heatmap = alt.Chart(heat).mark_rect().encode(
+            x="Month:T",
+            y="Team:N",
+            color="Events:Q",
+            tooltip=["Team", "Month:T", "Events"]
+        )
+
+        st.altair_chart(heatmap, use_container_width=True)
