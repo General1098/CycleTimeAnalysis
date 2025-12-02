@@ -2,134 +2,158 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-import sys, os
-import datetime
-
-# Ensure local imports work
-sys.path.append(os.path.dirname(__file__))
-
-from timepiece_integration import (
-    fetch_status_durations,
-    fetch_transition_dates,
-    parse_status_rules,
-    build_dataframe,
-)
+import io
+import base64
+import textwrap
+import math
+import json
 
 st.set_page_config(page_title="Cycle Time Analysis", layout="wide")
 
+# ---------- SIDEBAR CONFIG ----------
+st.sidebar.title("Cycle Time Analysis – Timepiece (OBSS)")
 
-# ---- Team detection from issue key ----
-def assign_team(issue_key: str) -> str:
-    if issue_key.startswith("C7SM"):
-        return "Team 1"
-    elif issue_key.startswith("C7O"):
-        return "Team 2"
-    elif issue_key.startswith("C7T4"):
-        return "Team 4"
-    return "Other"
+st.sidebar.markdown(
+    """
+Use this app to explore Cycle Time, slowest items and forecasting
+based on Timepiece exports.
 
+**How to use:**
+1. Export a CSV from Timepiece (OBSS) with at least:
+   - Issue key
+   - Status, transitions
+   - Created, Resolved / Done
+   - Any custom fields you care about (e.g. Team, Type, Epic, Story Points)
+2. Upload it in the main section.
+3. Choose filters and explore.
+"""
+)
 
-# ---- Monte Carlo (throughput based) ----
-def monte_carlo_forecast_throughput(completions_per_week, num_simulations=10000, items=None, weeks=None):
-    results = []
-
-    if items:  # Forecast completion time for X items
-        for _ in range(num_simulations):
-            total_done = 0
-            week_count = 0
-            while total_done < items:
-                total_done += np.random.choice(completions_per_week)
-                week_count += 1
-            results.append(week_count * 7)  # convert to days
-        return np.percentile(results, [50, 85, 95])
-
-    elif weeks:  # Forecast number of items completed in N weeks
-        for _ in range(num_simulations):
-            total_done = 0
-            for _ in range(weeks):
-                total_done += np.random.choice(completions_per_week)
-            results.append(total_done)
-        return np.percentile(results, [50, 85, 95])
+# File upload
+uploaded_file = st.sidebar.file_uploader(
+    "Upload Timepiece CSV",
+    type=["csv"],
+    help="Export from the OBSS Timepiece report with all the fields you need.",
+)
 
 
-# ===================== SIDEBAR: SETTINGS =====================
-with st.sidebar:
-    st.title("Cycle Time Analysis (OBSS Timepiece API)")
-    st.caption("Fetch Jira data via OBSS Timepiece Cloud")
+# ---------- DATA LOADING ----------
+@st.cache_data(show_spinner=False)
+def load_data(file_bytes: bytes) -> pd.DataFrame:
+    df = pd.read_csv(io.BytesIO(file_bytes))
+    # Normalise column names (so we can reference them safely)
+    df.columns = [c.strip() for c in df.columns]
+    return df
 
-    # Default API key hardcoded
-    api_key = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJjb20ub2Jzcy5wbHVnaW4udGltZS1pbi1zdGF0dXMiLCJzdWIiOiI2MzIxZDYyMWM3NjAxYzhlNGFiZjMxZjciLCJjbGllbnRLZXkiOiIwYjRjZjE5NC0yN2Q4LTM0MjItOGJmNi0wMWI1NzdiYzg4ZjUiLCJpc3MiOiJjb20ub2Jzcy5wbHVnaW4udGltZS1pbi1zdGF0dXMiLCJleHAiOjQxMDI0NDQ3NDAsImlhdCI6MTc1NzU5NTAxOH0.5shgcu7jHiQ4L5rTqFIHIhE-tiKnBsaab39LdyP_A4M"
-    st.text(f"Using API Key: {api_key[:6]}...{api_key[-6:]}")
 
-    filter_id = st.text_input("Saved Filter ID", value="10580")
+df: pd.DataFrame | None = None
+if uploaded_file is not None:
+    try:
+        df = load_data(uploaded_file.getvalue())
+    except Exception as e:
+        st.error(f"Could not read CSV: {e}")
 
-    st.markdown("### Status Buckets")
-    default_rules = """Blocked = On Hold (C7SM)
-Development = In Development (C7SM), In Progress (C7O), In Development (C7T4)
-Review = Review (C7SM)"""
-    rules_text = st.text_area(
-        "Rules (Bucket = Status1, Status2, ...)", value=default_rules, height=120
-    )
-
-    fetch_button = st.button("Fetch Data")
-
-if not api_key or not filter_id:
-    st.info("Enter Filter ID, then press **Fetch Data**.")
+if df is None:
+    st.info("Upload a Timepiece CSV to get started.")
     st.stop()
 
 
-# ===================== FETCH DATA FROM TIMEPIECE =====================
-if fetch_button:
-    with st.spinner("Fetching reports from Timepiece..."):
-        try:
-            duration_data = fetch_status_durations(api_key, filter_id)
-            transition_data = fetch_transition_dates(api_key, filter_id)
-            status_rules = parse_status_rules(rules_text)
-            raw = build_dataframe(duration_data, transition_data, status_rules)
-
-            # Assign teams automatically
-            if not raw.empty and "Key" in raw.columns:
-                raw["Team"] = raw["Key"].apply(assign_team)
-            else:
-                raw["Team"] = "Unknown"
-
-            raw["_bucketer"] = pd.to_datetime(raw["End"], errors="coerce")
-
-            # Cache results
-            st.session_state["raw_data"] = raw
-        except Exception as e:
-            st.error(f"Failed to fetch from Timepiece: {e}")
-            st.stop()
-
-# Use cached data if available
-if "raw_data" not in st.session_state:
-    st.info("Fetch data first.")
-    st.stop()
-
-raw = st.session_state["raw_data"]
-
-if raw.empty:
-    st.warning("No data returned from Timepiece.")
-    st.stop()
+# ---------- BASIC CLEANUP / DERIVED FIELDS ----------
+def safe_to_datetime(s):
+    return pd.to_datetime(s, errors="coerce")
 
 
-# ===================== MAIN PAGE =====================
-st.title("Cycle Time Analysis")
+if "Created" in df.columns:
+    df["Created"] = safe_to_datetime(df["Created"])
+if "Resolved" in df.columns:
+    df["Resolved"] = safe_to_datetime(df["Resolved"])
+if "End" in df.columns:
+    df["End"] = safe_to_datetime(df["End"])
 
-teams = sorted(raw["Team"].unique().tolist())
-selected_team = st.selectbox("Select Team", ["All Teams"] + teams, index=0)
-
-# Filter the view
-if selected_team == "All Teams":
-    view_df = raw.copy()
+# Derive CT in days
+if "Created" in df.columns:
+    end_col = "End" if "End" in df.columns else ("Resolved" if "Resolved" in df.columns else None)
+    if end_col:
+        df["CT_days"] = (df[end_col] - df["Created"]).dt.total_seconds() / (3600 * 24)
+    else:
+        df["CT_days"] = np.nan
 else:
-    view_df = raw[raw["Team"] == selected_team].copy()
+    df["CT_days"] = np.nan
 
-st.caption("Cycle Time = Blocked + Development + Review (if present)")
+# Fallback team column
+team_col_candidates = [c for c in df.columns if c.lower() in ("team", "squad", "board", "project")]
+team_col = team_col_candidates[0] if team_col_candidates else None
+if team_col is None:
+    df["Team"] = "All"
+    team_col = "Team"
+
+# Issue Type + Sprint friendly names
+issue_type_col = next((c for c in df.columns if c.lower().replace(" ", "") in ("issuetype", "type")), None)
+sprint_col = next((c for c in df.columns if c.lower() == "sprint"), None)
 
 
-# ===================== TABS =====================
-tabs = st.tabs(["Cycle Time", "Slowest Items", "Forecasting", "Data", "Sprint Analysis"])
+# ---------- GLOBAL FILTERS ----------
+teams = sorted(df[team_col].dropna().unique().tolist())
+selected_team = st.sidebar.selectbox("Team", ["All Teams"] + teams)
+
+date_col = "End" if "End" in df.columns else ("Resolved" if "Resolved" in df.columns else None)
+date_min, date_max = None, None
+if date_col:
+    valid_dates = df[date_col].dropna()
+    if not valid_dates.empty:
+        date_min, date_max = valid_dates.min(), valid_dates.max()
+
+if date_min is not None and date_max is not None:
+    start_date, end_date = st.sidebar.date_input(
+        "Date range",
+        value=(date_min.date(), date_max.date()),
+        min_value=date_min.date(),
+        max_value=date_max.date(),
+    )
+else:
+    start_date, end_date = None, None
+
+# Base filtered view
+view_df = df.copy()
+
+if selected_team != "All Teams":
+    view_df = view_df[view_df[team_col] == selected_team]
+
+if date_col and start_date and end_date:
+    mask = (view_df[date_col] >= pd.to_datetime(start_date)) & (
+        view_df[date_col] <= pd.to_datetime(end_date) + pd.Timedelta(days=1)
+    )
+    view_df = view_df[mask]
+
+# Optional IssueType & Sprint filters if present
+if issue_type_col and issue_type_col in view_df.columns:
+    all_types = sorted(view_df[issue_type_col].dropna().unique().tolist())
+    selected_types = st.sidebar.multiselect("Issue Types", all_types, default=all_types)
+    if selected_types:
+        view_df = view_df[view_df[issue_type_col].isin(selected_types)]
+
+if sprint_col and sprint_col in view_df.columns:
+    # Sprints can be multi-valued, so we only do a coarse filter here:
+    all_sprints = (
+        pd.Series(view_df[sprint_col].fillna(""))
+        .astype(str)
+        .str.split(",")
+        .explode()
+        .str.strip()
+    )
+    all_sprints = sorted([s for s in all_sprints.unique().tolist() if s])
+    selected_sprints = st.sidebar.multiselect("Sprint (coarse filter)", all_sprints)
+    if selected_sprints:
+        mask = view_df[sprint_col].fillna("").astype(str)
+        # Coarse contains check
+        mask = mask.apply(
+            lambda x: any(sel in x for sel in selected_sprints)
+        )
+        view_df = view_df[mask]
+
+
+# ---------- TAB LAYOUT ----------
+tabs = st.tabs(["Cycle Time", "Slowest Items", "Forecasting", "Data", "Sprint Analysis", "Context"])
 
 
 # ---------- OVERVIEW ----------
@@ -137,362 +161,472 @@ with tabs[0]:
 
     # ---- Merged Overview & Insights (view-only) ----
     st.subheader("Cycle Time — Overview & Insights" + ("" if selected_team == "All Teams" else f" — {selected_team}"))
-    col1, col2, col3, col4, col5 = st.columns(5)
 
-    avg_ct = round(view_df["CT"].mean(), 2) if "CT" in view_df.columns and view_df["CT"].notna().any() else np.nan
-    p85_ct = round(view_df["CT"].quantile(0.85), 2) if "CT" in view_df.columns and view_df["CT"].notna().any() else np.nan
-
-    if "_bucketer" in view_df.columns and view_df["_bucketer"].notna().any():
-        _vc = (
-            view_df["_bucketer"].dropna().dt.to_period("M").value_counts().sort_index()
-        )
-        items_this_month = int(_vc.iloc[-1]) if len(_vc) else 0
+    if view_df.empty:
+        st.info("No rows match the current filters.")
     else:
-        items_this_month = 0
-
-    col1.metric("Average CT (overall)", "--" if np.isnan(avg_ct) else avg_ct)
-    col2.metric("85th Percentile CT (overall)", "--" if np.isnan(p85_ct) else p85_ct)
-    col3.metric("Items this month", items_this_month)
-
-    st.divider()
-    
-    
-    with tabs[0]:
-        st.subheader("Cycle Time Trends")
-
-    
-        # === Enhanced CT Trends (Monthly/Rolling, Metric selector incl. P85, counts, provisional month) ===
-        def _build_ct_series_from_view(df: pd.DataFrame, tz: str = "Europe/London", rolling_days: int = 30, min_n_for_pct: int = 1):
-            if df is None or df.empty or "End" not in df.columns or "CT" not in df.columns:
-                return {"monthly": pd.DataFrame(), "rolling": pd.DataFrame()}
-            cols = ["End", "CT"] + (["IssueType"] if "IssueType" in df.columns else [])
-            d = df[cols].dropna(subset=["End", "CT"]).copy()
-            d.rename(columns={"End": "completed_date", "CT": "cycle_time_days"}, inplace=True)
-            d["completed_date"] = pd.to_datetime(d["completed_date"], utc=True, errors="coerce")
-            d = d.dropna(subset=["completed_date", "cycle_time_days"])
-            d["completed_date"] = d["completed_date"].dt.tz_convert(tz)
-    
-            # Monthly
-            d["month"] = (
-                d["completed_date"]
-                .dt.to_period("M")
-                .dt.to_timestamp("M")  # month-end for clearer labelling
-                .dt.tz_localize(tz)
-            )
-            monthly = (
-                d.groupby("month", as_index=False)
-                 .agg(mean_ct=("cycle_time_days", "mean"),
-                      median_ct=("cycle_time_days", "median"),
-                      p85_ct=("cycle_time_days", lambda x: x.quantile(0.85)),
-                      count=("cycle_time_days", "size"))
-                 .sort_values("month")
-                 .reset_index(drop=True)
-            )
-            now_tz = pd.Timestamp.now(tz=tz)
-
-            # Use end-of-month (to match the month-end we store in `monthly["month"]`)
-            current_month_end = (
-                pd.Timestamp(year=now_tz.year, month=now_tz.month, day=1, tz=now_tz.tz)
-                + pd.offsets.MonthEnd(0)
-            )
-
-            monthly["is_current_month"] = monthly["month"] == current_month_end
-    
-            # Monthly type breakdown for tooltip
-            if "IssueType" in d.columns:
-                mt = (
-                    d.groupby([
-                    d["completed_date"]
-                    .dt.to_period("M")
-                    .dt.to_timestamp("M")
-                    .dt.tz_localize(tz),
-                    "IssueType",
-                ])
-                     .size()
-                     .unstack(fill_value=0)
-                )
-                mt = mt.reindex(monthly["month"]).fillna(0).astype(int)
-                monthly["type_breakdown"] = mt.apply(lambda row: ", ".join([f"{k}: {int(v)}" for k, v in row.items() if v > 0]) if row.sum() > 0 else "", axis=1)
-            else:
-                monthly["type_breakdown"] = ""
-    
-            # Rolling trailing window
-            if d.empty:
-                return {"monthly": monthly, "rolling": pd.DataFrame()}
-            start_date = d["completed_date"].min().floor("D")
-            end_date = d["completed_date"].max().ceil("D")
-            day_index = pd.date_range(start=start_date, end=end_date, freq="D", tz=tz)
-    
-            means, medians, p85s, counts, types_info = [], [], [], [], []
-            for day in day_index:
-                window_start = day - pd.Timedelta(days=rolling_days - 1)
-                mask = (d["completed_date"] >= window_start) & (d["completed_date"] <= day + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
-                vals = d.loc[mask, "cycle_time_days"]
-                c = int(vals.shape[0]); counts.append(c)
-                means.append(float(vals.mean()) if c else None)
-                medians.append(float(vals.median()) if c else None)
-                p85s.append(float(vals.quantile(0.85)) if c > 0 else None)
-                if "IssueType" in d.columns:
-                    sub = d.loc[mask, ["IssueType"]]
-                    if not sub.empty:
-                        cnts = sub.value_counts().to_dict()
-                        types_info.append(", ".join([f"{k}: {v}" for k, v in cnts.items()]))
-                    else:
-                        types_info.append("")
-                else:
-                    types_info.append("")
-    
-            rolling = pd.DataFrame({"date": day_index, "mean_ct": means, "median_ct": medians, "p85_ct": p85s, "count": counts, "types_breakdown": types_info})
-            return {"monthly": monthly, "rolling": rolling}
-    
-        # Controls
-        ec1, ec2, ec3, ec4 = st.columns([1.3, 1.2, 1, 1.35])
-        eview = ec1.selectbox("Time grouping", ["Monthly", "Rolling (30 days)", "Rolling (14 days)"], index=0, key="ctenh_view")
-        metric = ec2.selectbox("Metric", ["Median (P50)", "Average (Mean)", "P85"], index=0, key="ctenh_metric")
-        eshow_counts = ec3.checkbox("Show item counts", value=True, key="ctenh_counts")
-        einclude_current = ec4.checkbox("Include current month", value=False, key="ctenh_current", help="If off, current month is excluded from monthly chart to avoid early-month bias.")
-    
-        ewindow = 30 if eview.startswith("Rolling (30") else 14 if eview.startswith("Rolling (14") else 30
-        ets = _build_ct_series_from_view(view_df, rolling_days=ewindow)
-    
-        # Single KPI tile based on selected Metric (last 30d)
-        ets30 = _build_ct_series_from_view(view_df, rolling_days=30)
-        last30 = ets30.get("rolling", pd.DataFrame())
-        metric_map = {"Median (P50)": ("Median CT (30d)", "median_ct"),
-                      "Average (Mean)": ("Avg CT (30d)", "mean_ct"),
-                      "P85": ("P85 CT (30d)", "p85_ct")}
-        label, field = metric_map.get(metric, ("Median CT (30d)", "median_ct"))
-        value = None
-        if last30 is not None and not last30.empty and field in last30.columns:
-            series = last30[field].dropna()
-            if not series.empty:
-                value = float(series.iloc[-1])
-        st.metric(label, f"{value:.1f} days" if value is not None else "—")
-    
-        # Per-issue-type tiles (Story/Bug/Task/Spike) for last 30d
-        try:
-            if "IssueType" in view_df.columns and "CT" in view_df.columns and "End" in view_df.columns:
-                _d = view_df.copy()
-                _d["End"] = pd.to_datetime(_d["End"], utc=True, errors="coerce")
-                if not _d["End"].isna().all():
-                    _end = _d["End"].max()
-                    _start = _end - pd.Timedelta(days=30)
-                    sub = _d.loc[(_d["End"] >= _start) & (_d["End"] <= _end), ["IssueType", "CT"]].dropna()
-                    if not sub.empty:
-                        if metric == "Median (P50)":
-                            agg = sub.groupby("IssueType")["CT"].median().round(1)
-                        elif metric == "Average (Mean)":
-                            agg = sub.groupby("IssueType")["CT"].mean().round(1)
-                        else:
-                            agg = sub.groupby("IssueType")["CT"].quantile(0.85).round(1)
-                        order = ["Story", "Bug", "Task", "Spike"]
-                        cols = st.columns(4)
-                        for i, it in enumerate(order):
-                            cols[i].metric(f"{it} (30d)", f"{agg[it]} days" if it in agg.index else "—")
-        except Exception:
-            pass
-    
-        # Chart
-        y_field_map = {"Median (P50)": "median_ct", "Average (Mean)": "mean_ct", "P85": "p85_ct"}
-        y_field = y_field_map[metric]
-        y_title = f"{metric} CT (days)"
-    
-        if eview == "Monthly":
-            monthly = ets["monthly"]
-            if monthly.empty:
-                st.info("No completed items to plot.")
-            else:
-                if not einclude_current and "is_current_month" in monthly.columns:
-                    monthly = monthly[~monthly["is_current_month"]]
-    
-                base = alt.Chart(monthly).encode(x=alt.X("month:T", title="Month"))
-                line = base.mark_line(point=True).encode(
-                    y=alt.Y(f"{y_field}:Q", title=y_title),
-                    tooltip=[
-                        alt.Tooltip("month:T", title="Month"),
-                        alt.Tooltip(f"{y_field}:Q", title=y_title, format=".2f"),
-                        alt.Tooltip("count:Q", title="Items"),
-                        alt.Tooltip("type_breakdown:N", title="Types"),
-                    ],
-                )
-                chart = line
-                if einclude_current and "is_current_month" in ets["monthly"].columns:
-                    provisional = base.transform_filter(alt.datum.is_current_month == True).mark_point(size=120, opacity=0.2).encode(
-                        y=f"{y_field}:Q",
-                        tooltip=[alt.Tooltip("month:T", title="Provisional Month")],
-                    )
-                    chart = (line + provisional)
-    
-                if eshow_counts:
-                    bars = base.mark_bar(opacity=0.2).encode(y=alt.Y("count:Q", title="Items (count)", axis=alt.Axis(titleColor="#666")))
-                    labels = base.mark_text(dy=-18).encode(text="count:Q")
-                    chart = (bars + line + labels)
-    
-                st.altair_chart(chart.properties(height=380), use_container_width=True)
+        # Core stats
+        ct_series = view_df["CT_days"].dropna()
+        if ct_series.empty:
+            st.info("No completed items with CT data in current filter.")
         else:
-            rolling = ets["rolling"]
-            if rolling.empty:
-                st.info("No completed items to plot.")
-            else:
-                base = alt.Chart(rolling).encode(x=alt.X("date:T", title="Date"))
-                line = base.mark_line().encode(
-                    y=alt.Y(f"{y_field}:Q", title=f"{y_title} — trailing {ewindow}d"),
-                    tooltip=[
-                        alt.Tooltip("date:T", title="Date"),
-                        alt.Tooltip(f"{y_field}:Q", title=y_title, format=".2f"),
-                        alt.Tooltip("count:Q", title=f"Items in last {ewindow}d"),
-                        alt.Tooltip("types_breakdown:N", title="Types"),
-                    ],
-                )
-                chart = line
-                if eshow_counts:
-                    area = base.mark_area(opacity=0.15).encode(
-                        y=alt.Y("count:Q", title=f"Items (last {ewindow}d)"),
-                        tooltip=[alt.Tooltip("count:Q", title=f"Items (last {ewindow}d)")],
+            avg = ct_series.mean()
+            median = ct_series.median()
+            p85 = ct_series.quantile(0.85)
+            p95 = ct_series.quantile(0.95)
+            count = len(ct_series)
+
+            col_a, col_b, col_c, col_d, col_e = st.columns(5)
+            col_a.metric("Count", f"{count}")
+            col_b.metric("Average CT (days)", f"{avg:.2f}")
+            col_c.metric("Median CT (days)", f"{median:.2f}")
+            col_d.metric("P85 CT (days)", f"{p85:.2f}")
+            col_e.metric("P95 CT (days)", f"{p95:.2f}")
+
+            # Distribution chart with Fibonacci-ish overlay
+            hist_source = pd.DataFrame({"CT_days": ct_series})
+            base = alt.Chart(hist_source).transform_bin(
+                "binCT", field="CT_days", bin={"step": 1}
+            ).mark_bar(opacity=0.7).encode(
+                x=alt.X("binCT:Q", bin="binned", title="CT (days)"),
+                x2="binCT_end:Q",
+                y=alt.Y("count()", title="Items"),
+            )
+
+            # Fibonacci-like markers: 1, 2, 3, 5, 8, 13...
+            fibs = [1, 2, 3, 5, 8, 13, 21]
+            fibs = [f for f in fibs if f <= max(1, ct_series.max())]
+            fib_df = pd.DataFrame({"fib": fibs})
+            fib_layer = alt.Chart(fib_df).mark_rule(color="red", strokeDash=[4, 4]).encode(
+                x="fib:Q",
+                tooltip=["fib:Q"],
+            )
+
+            st.altair_chart((base + fib_layer).properties(height=320), use_container_width=True)
+
+            # Time-series by completion date if we have date_col
+            if date_col:
+                ts_df = view_df[~view_df[date_col].isna()].copy()
+                if not ts_df.empty:
+                    ts_df["Month"] = ts_df[date_col].dt.to_period("M").dt.to_timestamp()
+
+                    # Monthly stats
+                    group = ts_df.groupby("Month")["CT_days"]
+                    ts_stats = group.agg(
+                        count="count",
+                        avg="mean",
+                        median="median",
+                        p85=lambda x: x.quantile(0.85),
+                    ).reset_index()
+
+                    line = alt.Chart(ts_stats).mark_line(point=True).encode(
+                        x=alt.X("Month:T", title="Month"),
+                        y=alt.Y("median:Q", title="Median CT (days)"),
+                        tooltip=[
+                            alt.Tooltip("Month:T", title="Month"),
+                            alt.Tooltip("count:Q", title="# items"),
+                            alt.Tooltip("avg:Q", title="Avg CT", format=".2f"),
+                            alt.Tooltip("median:Q", title="Median CT", format=".2f"),
+                            alt.Tooltip("p85:Q", title="P85 CT", format=".2f"),
+                        ],
+                        color=alt.value("#1f77b4"),
                     )
-                    chart = (area + line)
-                st.altair_chart(chart.properties(height=380), use_container_width=True)
+
+                    band = alt.Chart(ts_stats).mark_area(opacity=0.15).encode(
+                        x="Month:T",
+                        y="median:Q",
+                        y2="p85:Q",
+                    )
+
+                    st.altair_chart((band + line).properties(height=320), use_container_width=True)
+
+            # Quick textual insights
+            st.markdown("### Quick Insights")
+
+            bullet_points = []
+            bullet_points.append(
+                f"- **Median CT** is **{median:.1f} days**, with P85 at **{p85:.1f} days**."
+            )
+
+            if p85 > 2 * median:
+                bullet_points.append(
+                    "- The tail (P85) is more than twice the median. There are some long-running outliers dragging the tail."
+                )
+            else:
+                bullet_points.append(
+                    "- The tail (P85) is reasonably close to the median, indicating a tighter distribution."
+                )
+
+            # You can add more rule-based insights here, e.g. based on type/priority/size distributions
+
+            st.markdown("\n".join(bullet_points))
 
 
+# ---------- SLOWEST ITEMS ----------
 with tabs[1]:
-    # ---------- SLOWEST ITEMS ----------
-        st.subheader("Slowest Items")
-        if not view_df.empty:
-            th = view_df["_bucketer"].dt.to_period("M")
-            p85 = view_df.groupby(th)["CT"].quantile(0.85).rename("p85")
-            merged = view_df.join(p85, on=th)
-            slow = merged[merged["CT"] > merged["p85"]].copy()
+    st.subheader("Slowest Items")
 
-            if slow.empty:
-                st.info("No items above the 85th percentile.")
-            else:
-                st.dataframe(
-                    slow[["Key", "Team", "CT", "Start", "End"]]
-                    .sort_values("CT", ascending=False)
-                    .head(200),
-                    use_container_width=True,
-                )
-        else:
-            st.info("No data available.")
+    if view_df.empty:
+        st.info("No data in current filter set.")
+    else:
+        top_n = st.slider("How many items to show?", 5, 100, 20)
+        slowest = view_df.sort_values("CT_days", ascending=False).head(top_n)
+
+        key_col = next((c for c in slowest.columns if c.lower().replace(" ", "") in ("issuekey", "key")), None)
+        summary_col = next((c for c in slowest.columns if c.lower() in ("summary", "title", "description")), None)
+
+        display_cols = []
+        if key_col:
+            display_cols.append(key_col)
+        if summary_col:
+            display_cols.append(summary_col)
+        for col in [team_col, issue_type_col, "CT_days", date_col]:
+            if col and col not in display_cols and col in slowest.columns:
+                display_cols.append(col)
+
+        st.dataframe(slowest[display_cols], use_container_width=True)
+
+        # Provide quick download of the slowest items
+        csv = slowest.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download slowest items CSV",
+            data=csv,
+            file_name="slowest_items.csv",
+            mime="text/csv",
+        )
 
 
+# ---------- FORECASTING ----------
 with tabs[2]:
-    # ---------- FORECASTING ----------
-        st.subheader("Monte Carlo Forecasting (Throughput Based)")
+    st.subheader("Forecasting")
 
-        if view_df.empty or view_df["_bucketer"].dropna().empty:
-            st.info("No completion data available for forecasting.")
+    if view_df.empty:
+        st.info("No data in current filter set.")
+    else:
+        ct_values = view_df["CT_days"].dropna()
+        if ct_values.empty:
+            st.info("No CT values to forecast from.")
         else:
-            # Build throughput history (items per week)
-            throughput = (
-                view_df["_bucketer"]
-                .dropna()
-                .dt.to_period("W")
-                .value_counts()
-                .values
+            st.markdown(
+                """
+                This section uses a simple Monte Carlo approach to project
+                how long it might take to complete a batch of items,
+                based purely on your historical CT distribution.
+                """
             )
-            if len(throughput) == 0:
-                st.info("Not enough throughput data.")
-            else:
-                mode = st.radio(
-                    "Forecast mode",
-                    ["How many items in N weeks?", "When will X items be done?"],
-                    index=0,
-                )
-                start_date = st.date_input("Start date", datetime.date.today())
 
-                if mode == "How many items in N weeks?":
-                    weeks = st.number_input("Weeks", min_value=1, max_value=52, value=4)
-                    sims = st.number_input(
-                        "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
-                    )
-                    results = []
-                    for _ in range(sims):
-                        total_done = 0
-                        for _ in range(weeks):
-                            total_done += np.random.choice(throughput)
-                        results.append(total_done)
+            batch_size = st.number_input(
+                "Batch size (number of items)",
+                min_value=1,
+                max_value=500,
+                value=10,
+                step=1,
+            )
 
-                    p50, p85, p95 = np.percentile(results, [50, 85, 95])
+            trials = st.number_input(
+                "Number of simulations",
+                min_value=200,
+                max_value=5000,
+                value=1000,
+                step=100,
+            )
 
-                    st.write(f"In {weeks} weeks (starting {start_date:%d %b %Y}):")
-                    st.write(f"- **50% likely**: {int(p50)} items")
-                    st.write(f"- **85% likely**: {int(p85)} items")
-                    st.write(f"- **95% likely**: {int(p95)} items")
+            ct_array = ct_values.values
 
-                    # Histogram
-                    chart_data = pd.DataFrame({"Items Delivered": results})
-                    hist = (
-                        alt.Chart(chart_data)
-                        .mark_bar()
-                        .encode(
-                            alt.X("Items Delivered:Q", bin=alt.Bin(maxbins=30)),
-                            y="count()",
-                        )
-                    )
-                    st.altair_chart(hist, use_container_width=True)
+            @st.cache_data(show_spinner=False)
+            def run_monte_carlo(ct_array, n_items, n_trials):
+                rng = np.random.default_rng(seed=42)
+                draws = rng.choice(ct_array, size=(n_trials, n_items), replace=True)
+                totals = draws.sum(axis=1)
+                return totals
 
-                else:
-                    items = st.number_input(
-                        "Number of items", min_value=1, max_value=200, value=10
-                    )
-                    sims = st.number_input(
-                        "Simulations", min_value=1000, max_value=50000, value=10000, step=1000
-                    )
-                    results = []
-                    for _ in range(sims):
-                        total_done = 0
-                        week_count = 0
-                        while total_done < items:
-                            total_done += np.random.choice(throughput)
-                            week_count += 1
-                        results.append(week_count * 7)  # days
+            totals = run_monte_carlo(ct_array, int(batch_size), int(trials))
 
-                    p50, p85, p95 = np.percentile(results, [50, 85, 95])
+            p50 = np.percentile(totals, 50)
+            p85 = np.percentile(totals, 85)
+            p95 = np.percentile(totals, 95)
 
-                    st.write(f"To deliver {items} items (starting {start_date:%d %b %Y}):")
-                    st.write(
-                        f"- **50% likely**: {(start_date + datetime.timedelta(days=p50)):%d %b %Y}"
-                    )
-                    st.write(
-                        f"- **85% likely**: {(start_date + datetime.timedelta(days=p85)):%d %b %Y}"
-                    )
-                    st.write(
-                        f"- **95% likely**: {(start_date + datetime.timedelta(days=p95)):%d %b %Y}"
-                    )
+            col_f1, col_f2, col_f3 = st.columns(3)
+            col_f1.metric("P50 (days)", f"{p50:.1f}")
+            col_f2.metric("P85 (days)", f"{p85:.1f}")
+            col_f3.metric("P95 (days)", f"{p95:.1f}")
 
-                    # Histogram
-                    chart_data = pd.DataFrame({"Days to Complete": results})
-                    hist = (
-                        alt.Chart(chart_data)
-                        .mark_bar()
-                        .encode(
-                            alt.X("Days to Complete:Q", bin=alt.Bin(maxbins=30)),
-                            y="count()",
-                        )
-                    )
-                    st.altair_chart(hist, use_container_width=True)
+            forecast_df = pd.DataFrame({"Total_CT_days": totals})
+            chart = alt.Chart(forecast_df).transform_bin(
+                "binCT", field="Total_CT_days", bin={"maxbins": 30}
+            ).mark_bar().encode(
+                x=alt.X("binCT:Q", bin="binned", title="Simulated total CT (days)"),
+                x2="binCT_end:Q",
+                y=alt.Y("count()", title="Count"),
+            )
+
+            st.altair_chart(chart.properties(height=320), use_container_width=True)
 
 
-# ---------- DATA ----------
+# ---------- RAW DATA VIEW ----------
 with tabs[3]:
-    st.subheader("Data preview")
+    st.subheader("Raw Data View")
 
-    row_count = len(view_df)
-    st.caption(f"Showing all {row_count} rows returned from Timepiece")
+    if view_df.empty:
+        st.info("No data to show.")
+    else:
+        row_count = len(view_df)
+        st.caption(f"Showing all {row_count} rows returned from Timepiece")
 
-    st.dataframe(view_df, use_container_width=True)
+        st.dataframe(view_df, use_container_width=True)
+
+
+# ---------- CONTEXT / LEADERSHIP VIEW ----------
+with tabs[5]:
+    st.subheader("Business Context & Leadership View")
+    st.caption(
+        "Use this tab to line up cycle time with people movements, big projects, and other constraints "
+        "without using it to judge team performance."
+    )
+
+    st.markdown(
+        """
+        **How to use this tab**
+
+        1. Prepare a CSV of context events with at least these columns (case-insensitive):
+           - `team` (or `squad`)
+           - `start_date` (or `start`)
+        2. Optional columns (if present, they will be used in tooltips and the timeline):
+           - `end_date` / `end` / `finish`
+           - `event_type` / `type` / `category`
+           - `who` / `person` / `people` / `owner`
+           - `description` / `details` / `note` / `notes`
+        3. Upload the CSV below and select a team at the top of the page.
+        """
+    )
+
+    ctx_file = st.file_uploader(
+        "Upload context events CSV",
+        type="csv",
+        key="context_events_csv",
+        help="Contains key people moves, project phases, holidays, etc."
+    )
+
+    context_df = None
+    if ctx_file is not None:
+        try:
+            raw_ctx = pd.read_csv(ctx_file)
+            if raw_ctx.empty:
+                st.warning("The uploaded CSV appears to be empty.")
+            else:
+                # Normalise column names
+                lower_map = {c.lower().strip(): c for c in raw_ctx.columns}
+
+                def _col(options):
+                    for o in options:
+                        if o in lower_map:
+                            return lower_map[o]
+                    return None
+
+                team_col_ctx = _col(["team", "squad"])
+                start_col = _col(["start_date", "start"])
+                end_col = _col(["end_date", "end", "finish"])
+                type_col = _col(["event_type", "type", "category"])
+                who_col = _col(["who", "person", "people", "owner"])
+                desc_col = _col(["description", "details", "note", "notes"])
+
+                required = [team_col_ctx, start_col]
+                if any(c is None for c in required):
+                    st.error(
+                        "CSV must include at least 'team' and 'start_date' columns "
+                        "(we also accept 'squad' and 'start')."
+                    )
+                else:
+                    context_df = pd.DataFrame()
+                    context_df["Team"] = raw_ctx[team_col_ctx].astype(str)
+
+                    context_df["Start"] = pd.to_datetime(
+                        raw_ctx[start_col], errors="coerce"
+                    )
+                    if end_col:
+                        context_df["End"] = pd.to_datetime(
+                            raw_ctx[end_col], errors="coerce"
+                        )
+                    else:
+                        context_df["End"] = pd.NaT
+
+                    if type_col:
+                        context_df["EventType"] = raw_ctx[type_col].astype(str)
+                    else:
+                        context_df["EventType"] = "Event"
+
+                    if who_col:
+                        context_df["Who"] = raw_ctx[who_col].astype(str)
+                    else:
+                        context_df["Who"] = ""
+
+                    if desc_col:
+                        context_df["Description"] = raw_ctx[desc_col].astype(str)
+                    else:
+                        context_df["Description"] = ""
+
+                    # Drop rows with no valid Start date
+                    context_df = context_df.dropna(subset=["Start"])
+                    if context_df.empty:
+                        st.warning(
+                            "No valid rows after parsing dates. "
+                            "Check that your start_date column contains real dates."
+                        )
+        except Exception as e:
+            st.error(f"Could not read context CSV: {e}")
+
+    if context_df is None:
+        st.info(
+            "Upload a context-events CSV to see overlays and summaries. "
+            "Expected columns at minimum: Team, Start_date; optional: End_date, EventType, Who, Description."
+        )
+    else:
+        st.markdown("**Context events loaded (preview)**")
+        st.dataframe(context_df.head(50), use_container_width=True)
+
+        st.divider()
+
+        # --- 1. CT vs Time with context overlays for the selected team ---
+        st.markdown("### 1. Cycle time with context overlays")
+
+        if selected_team == "All Teams":
+            st.info(
+                "Select a specific team at the top of the page to see cycle time with context overlays."
+            )
+        else:
+            team_ctx = context_df[context_df["Team"] == selected_team].copy()
+
+            if team_ctx.empty:
+                st.info(f"No context events found for {selected_team}.")
+            else:
+                # Build a simple monthly series from view_df
+                if date_col:
+                    ts_df_ctx = view_df[~view_df[date_col].isna()].copy()
+                    ts_df_ctx["month"] = ts_df_ctx[date_col].dt.to_period("M").dt.to_timestamp()
+
+                    group_ctx = ts_df_ctx.groupby("month")["CT_days"]
+                    monthly = group_ctx.agg(
+                        median_ct="median",
+                        count="count",
+                    ).reset_index()
+                else:
+                    monthly = pd.DataFrame()
+
+                if monthly.empty:
+                    st.info("No completed items to plot for this team.")
+                else:
+                    base = alt.Chart(monthly).encode(
+                        x=alt.X("month:T", title="Month")
+                    )
+
+                    # Median CT line
+                    line = base.mark_line(point=True).encode(
+                        y=alt.Y("median_ct:Q", title="Median CT (days)"),
+                        tooltip=[
+                            alt.Tooltip("month:T", title="Month"),
+                            alt.Tooltip(
+                                "median_ct:Q", title="Median CT", format=".2f"
+                            ),
+                            alt.Tooltip("count:Q", title="Items"),
+                        ],
+                    )
+
+                    # Event markers: vertical dashed rules at Start
+                    event_chart = (
+                        alt.Chart(team_ctx)
+                        .mark_rule(strokeDash=[4, 4], size=2)
+                        .encode(
+                            x=alt.X("Start:T", title=""),
+                            color=alt.Color("EventType:N", title="Event"),
+                            tooltip=[
+                                alt.Tooltip("EventType:N", title="Event"),
+                                alt.Tooltip("Who:N", title="Who"),
+                                alt.Tooltip("Description:N", title="Details"),
+                                alt.Tooltip("Start:T", title="Start"),
+                                alt.Tooltip("End:T", title="End"),
+                            ],
+                        )
+                    )
+
+                    st.altair_chart(
+                        (line + event_chart).properties(height=380),
+                        use_container_width=True,
+                    )
+
+                    # Human-readable timeline
+                    st.markdown("#### Context timeline")
+                    team_ctx_sorted = team_ctx.sort_values("Start")
+                    for _, row in team_ctx_sorted.iterrows():
+                        date_str = row["Start"].date().isoformat()
+                        title = f"**{date_str} — {row['EventType']}**"
+                        who = (
+                            f" ({row['Who']})"
+                            if isinstance(row["Who"], str)
+                            and row["Who"].strip()
+                            else ""
+                        )
+                        desc = (
+                            f"{row['Description']}"
+                            if isinstance(row["Description"], str)
+                            else ""
+                        )
+                        st.markdown(
+                            f"{title}{who}<br/>{desc}",
+                            unsafe_allow_html=True,
+                        )
+
+        st.divider()
+
+        # --- 2. Context load heatmap across teams ---
+        st.markdown("### 2. Context load heatmap (all teams)")
+
+        ctx_heat = context_df.copy()
+        ctx_heat["Month"] = (
+            ctx_heat["Start"]
+            .dt.to_period("M")
+            .dt.to_timestamp()
+        )
+
+        heat = (
+            ctx_heat.groupby(["Team", "Month"])
+            .size()
+            .reset_index(name="EventCount")
+        )
+
+        if heat.empty:
+            st.info("No context events to show in heatmap.")
+        else:
+            heat_chart = (
+                alt.Chart(heat)
+                .mark_rect()
+                .encode(
+                    x=alt.X("Month:T", title="Month"),
+                    y=alt.Y("Team:N", title="Team"),
+                    color=alt.Color("EventCount:Q", title="Events"),
+                    tooltip=[
+                        alt.Tooltip("Team:N", title="Team"),
+                        alt.Tooltip("Month:T", title="Month"),
+                        alt.Tooltip("EventCount:Q", title="Events"),
+                    ],
+                )
+            )
+
+            st.altair_chart(
+                heat_chart.properties(height=260),
+                use_container_width=True,
+            )
 
 
 # ---------- SPRINT ANALYSIS ----------
 try:
-    sprint_tab = tabs[-1]
+    # Index 4 == "Sprint Analysis" (we added "Context" as index 5)
+    sprint_tab = tabs[4]
 except Exception:
     sprint_tab = None
 
 if sprint_tab is not None:
     with sprint_tab:
-                st.subheader("Sprint Analysis")
+        st.subheader("Sprint Analysis")
 
     df_src = view_df if 'view_df' in globals() else (df if 'df' in globals() else None)
     if df_src is None or df_src.empty or "Sprint" not in df_src.columns or "IssueType" not in df_src.columns:
@@ -513,119 +647,63 @@ if sprint_tab is not None:
             end_col = "End" if "End" in expanded.columns else ("Resolved" if "Resolved" in expanded.columns else None)
             expanded["_enddate"] = pd.to_datetime(expanded[end_col], errors="coerce") if end_col else pd.NaT
 
-            # Order sprints from latest to oldest
+            # Order sprints by end date median
             sprint_order = (
                 expanded.groupby("Sprint")["_enddate"]
-                .max()
-                .sort_values(ascending=False)
-                .index.tolist()
+                .median()
+                .sort_values()
+                .index
+                .tolist()
             )
 
-            expanded["IssueType"] = expanded["IssueType"].fillna("Unknown")
+            # 1) Sprint vs CT (median) line chart
+            ct_by_sprint = (
+                expanded.groupby("Sprint")["CT_days"]
+                .agg(["count", "mean", "median", lambda x: x.quantile(0.85)])
+                .reset_index()
+            )
+            ct_by_sprint.columns = ["Sprint", "Count", "AvgCT", "MedianCT", "P85CT"]
+            ct_by_sprint["Sprint"] = pd.Categorical(ct_by_sprint["Sprint"], categories=sprint_order, ordered=True)
+            ct_by_sprint = ct_by_sprint.sort_values("Sprint")
 
-            # Basic counts
-            grouped = expanded.groupby(["Sprint", "IssueType"]).size().reset_index(name="Count")
-            totals = expanded.groupby("Sprint").size().reset_index(name="Total")
-            merged = pd.merge(grouped, totals, on="Sprint", how="left")
-            merged["Percent"] = (merged["Count"] / merged["Total"] * 100)
-
-            # Issue type ordering
-            ORDER = {"Story": 0, "Bug": 1, "Spike": 2, "Task": 3}
-
-            # Compact sprint % summary
-            def make_compact(group):
-                d = dict(zip(group["IssueType"], group["Percent"]))
-                parts = []
-                for it in ["Story", "Bug", "Spike", "Task"]:
-                    if it in d:
-                        parts.append(f"{it}: {d[it]:.0f}%")
-                # Include any additional types
-                extras = sorted([k for k in d.keys() if k not in ORDER])
-                for it in extras:
-                    parts.append(f"{it}: {d[it]:.0f}%")
-                return ", ".join(parts)
-
-            compact = (
-                merged.groupby("Sprint")
-                      .apply(make_compact)
-                      .rename("Composition")
-                      .reindex(sprint_order)
+            sprint_chart = alt.Chart(ct_by_sprint).mark_line(point=True).encode(
+                x=alt.X("Sprint:N", sort=sprint_order, title="Sprint"),
+                y=alt.Y("MedianCT:Q", title="Median CT (days)"),
+                tooltip=[
+                    alt.Tooltip("Sprint:N", title="Sprint"),
+                    alt.Tooltip("Count:Q", title="# Items"),
+                    alt.Tooltip("AvgCT:Q", title="Avg CT", format=".2f"),
+                    alt.Tooltip("MedianCT:Q", title="Median CT", format=".2f"),
+                    alt.Tooltip("P85CT:Q", title="P85 CT", format=".2f"),
+                ],
             )
 
-            st.markdown("**Sprint breakdown — click a sprint to expand**")
+            if sprint_tab is not None:
+                with sprint_tab:
+                    st.markdown("### CT by Sprint (Median with P85)")
+                    st.altair_chart(sprint_chart.properties(height=320), use_container_width=True)
 
-            # ---- LOOP THROUGH EACH SPRINT ----
-            for spr in sprint_order:
+            # 2) Sprint / Type composition (stacked bar)
+            comp = (
+                expanded.groupby(["Sprint", "IssueType"])
+                .size()
+                .reset_index(name="Count")
+            )
+            comp["Sprint"] = pd.Categorical(comp["Sprint"], categories=sprint_order, ordered=True)
+            comp = comp.sort_values("Sprint")
 
-                # Compute Sprint-level 85th CT
-                sprint_items = expanded[expanded["Sprint"] == spr]
-                if not sprint_items.empty and "CT" in sprint_items.columns:
-                    sprint_p85 = sprint_items["CT"].quantile(0.85)
-                    sprint_p85_text = f" • 85th CT: {sprint_p85:.1f} days"
-                else:
-                    sprint_p85_text = ""
+            comp_chart = alt.Chart(comp).mark_bar().encode(
+                x=alt.X("Sprint:N", sort=sprint_order, title="Sprint"),
+                y=alt.Y("Count:Q", stack="normalize", title="Proportion"),
+                color=alt.Color("IssueType:N", title="Issue Type"),
+                tooltip=[
+                    alt.Tooltip("Sprint:N", title="Sprint"),
+                    alt.Tooltip("IssueType:N", title="Issue Type"),
+                    alt.Tooltip("Count:Q", title="Count"),
+                ],
+            )
 
-                # Sprint header
-                label = f"{spr} — {compact.get(spr, '')}{sprint_p85_text}"
-
-                # EXPANDER BLOCK
-                with st.expander(label):
-                    spr_total = int(totals[totals["Sprint"] == spr]["Total"].iloc[0]) if spr in totals["Sprint"].values else 0
-                    st.caption(f"Total items: {spr_total}")
-
-                    # Filter sprint items and sort IssueTypes
-                    g = merged[merged["Sprint"] == spr].copy()
-                    g["order_key"] = g["IssueType"].map(ORDER).fillna(99)
-                    g = g.sort_values(["order_key", "IssueType"]).drop(columns=["order_key"])
-                    g["Percent"] = g["Percent"].round(1)
-
-                    # Compute per-IssueType P85 CT
-                    if not sprint_items.empty and "CT" in sprint_items.columns:
-                        p85_by_type = sprint_items.groupby("IssueType")["CT"].quantile(0.85)
-                    else:
-                        p85_by_type = {}
-
-                    # Add column for display
-                    g = g.copy()
-                    g["85th CT (days)"] = g["IssueType"].map(p85_by_type).round(2)
-
-                    # Summary table
-                    st.dataframe(
-                        g[["IssueType", "Count", "Percent", "85th CT (days)"]].reset_index(drop=True),
-                        use_container_width=True,
-                    )
-
-                    # ---- Items-by-IssueType drilldown ----
-                    st.markdown("**Items by Issue Type**")
-
-                    has_key_col = "Key" in sprint_items.columns
-                    has_summary_col = "Summary" in sprint_items.columns
-
-                    for itype in g["IssueType"].unique():
-                        sub_items = sprint_items[sprint_items["IssueType"] == itype].copy()
-                        if sub_items.empty:
-                            continue
-
-                        title = f"{itype} ({len(sub_items)} items)"
-                        with st.expander(title):
-                            # Build columns in preferred order: Key, Summary, IssueType, CT, Start, End
-                            cols_to_show = []
-
-                            if has_key_col:
-                                cols_to_show.append("Key")
-                            if has_summary_col:
-                                cols_to_show.append("Summary")
-
-                            for col in ["IssueType", "CT", "Start", "End"]:
-                                if col in sub_items.columns and col not in cols_to_show:
-                                    cols_to_show.append(col)
-
-                            if cols_to_show:
-                                st.dataframe(
-                                    sub_items[cols_to_show]
-                                        .sort_values("CT", ascending=False)
-                                        .reset_index(drop=True),
-                                    use_container_width=True,
-                                )
-                            else:
-                                st.info("No item-level columns available to display for this sprint.")
+            if sprint_tab is not None:
+                with sprint_tab:
+                    st.markdown("### Sprint Composition by Issue Type")
+                    st.altair_chart(comp_chart.properties(height=320), use_container_width=True)
