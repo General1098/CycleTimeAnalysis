@@ -498,143 +498,128 @@ except Exception:
 
 if sprint_tab is not None:
     with sprint_tab:
-                st.subheader("Sprint Analysis")
+        st.subheader("Sprint Analysis")
 
-    df_src = view_df if 'view_df' in globals() else (df if 'df' in globals() else None)
-    if df_src is None or df_src.empty or "Sprint" not in df_src.columns or "IssueType" not in df_src.columns:
-        st.info("No sprint/issue type data available.")
-    else:
-        # Split multi-sprint entries
-        expanded = df_src.copy()
-        expanded["Sprint"] = expanded["Sprint"].fillna("")
-        expanded = expanded.assign(Sprint=expanded["Sprint"].astype(str).str.split(","))
-        expanded = expanded.explode("Sprint")
-        expanded["Sprint"] = expanded["Sprint"].astype(str).str.strip()
-        expanded = expanded[expanded["Sprint"] != ""]
-
-        if expanded.empty:
-            st.info("No sprint data after expansion.")
+        df_src = view_df if 'view_df' in globals() else (df if 'df' in globals() else None)
+        if df_src is None or df_src.empty or "Sprint" not in df_src.columns or "IssueType" not in df_src.columns:
+            st.info("No sprint/issue type data available.")
         else:
-            # Convert End dates for ordering
-            end_col = "End" if "End" in expanded.columns else ("Resolved" if "Resolved" in expanded.columns else None)
-            expanded["_enddate"] = pd.to_datetime(expanded[end_col], errors="coerce") if end_col else pd.NaT
+            # Split multi-sprint entries
+            expanded = df_src.copy()
+            expanded["Sprint"] = expanded["Sprint"].fillna("")
+            expanded = expanded.assign(Sprint=expanded["Sprint"].astype(str).str.split(","))
+            expanded = expanded.explode("Sprint")
+            expanded["Sprint"] = expanded["Sprint"].astype(str).str.strip()
+            expanded = expanded[expanded["Sprint"] != ""]
 
-            # Order sprints from latest to oldest
-            sprint_order = (
-                expanded.groupby("Sprint")["_enddate"]
-                .max()
-                .sort_values(ascending=False)
-                .index.tolist()
-            )
+            if expanded.empty:
+                st.info("No sprint data after expansion.")
+            else:
+                # Convert End dates for ordering
+                end_col = "End" if "End" in expanded.columns else ("Resolved" if "Resolved" in expanded.columns else None)
+                expanded["_enddate"] = pd.to_datetime(expanded[end_col], errors="coerce") if end_col else pd.NaT
 
-            expanded["IssueType"] = expanded["IssueType"].fillna("Unknown")
+                # Order sprints from latest to oldest
+                sprint_order = (
+                    expanded.groupby("Sprint")["_enddate"]
+                    .max()
+                    .sort_values(ascending=False)
+                    .index.tolist()
+                )
 
-            # Basic counts
-            grouped = expanded.groupby(["Sprint", "IssueType"]).size().reset_index(name="Count")
-            totals = expanded.groupby("Sprint").size().reset_index(name="Total")
-            merged = pd.merge(grouped, totals, on="Sprint", how="left")
-            merged["Percent"] = (merged["Count"] / merged["Total"] * 100)
+                expanded["IssueType"] = expanded["IssueType"].fillna("Unknown")
 
-            # Issue type ordering
-            ORDER = {"Story": 0, "Bug": 1, "Spike": 2, "Task": 3}
+                # Basic counts
+                grouped = expanded.groupby(["Sprint", "IssueType"]).size().reset_index(name="Count")
+                totals = expanded.groupby("Sprint").size().reset_index(name="Total")
+                merged = pd.merge(grouped, totals, on="Sprint", how="left")
+                merged["Percent"] = (merged["Count"] / merged["Total"] * 100)
 
-            # Compact sprint % summary
-            def make_compact(group):
-                d = dict(zip(group["IssueType"], group["Percent"]))
-                parts = []
-                for it in ["Story", "Bug", "Spike", "Task"]:
-                    if it in d:
+                # Issue type ordering
+                ORDER = {"Story": 0, "Bug": 1, "Spike": 2, "Task": 3}
+
+                def make_compact(group):
+                    d = dict(zip(group["IssueType"], group["Percent"]))
+                    parts = []
+                    for it in ["Story", "Bug", "Spike", "Task"]:
+                        if it in d:
+                            parts.append(f"{it}: {d[it]:.0f}%")
+                    extras = sorted([k for k in d.keys() if k not in ORDER])
+                    for it in extras:
                         parts.append(f"{it}: {d[it]:.0f}%")
-                # Include any additional types
-                extras = sorted([k for k in d.keys() if k not in ORDER])
-                for it in extras:
-                    parts.append(f"{it}: {d[it]:.0f}%")
-                return ", ".join(parts)
+                    return ", ".join(parts)
 
-            compact = (
-                merged.groupby("Sprint")
-                      .apply(make_compact)
-                      .rename("Composition")
-                      .reindex(sprint_order)
-            )
+                compact = (
+                    merged.groupby("Sprint")
+                          .apply(make_compact)
+                          .rename("Composition")
+                          .reindex(sprint_order)
+                )
 
-            st.markdown("**Sprint breakdown — click a sprint to expand**")
+                st.markdown("**Sprint breakdown — click a sprint to expand**")
 
-            # ---- LOOP THROUGH EACH SPRINT ----
-            for spr in sprint_order:
-
-                # Compute Sprint-level 85th CT
-                sprint_items = expanded[expanded["Sprint"] == spr]
-                if not sprint_items.empty and "CT" in sprint_items.columns:
-                    sprint_p85 = sprint_items["CT"].quantile(0.85)
-                    sprint_p85_text = f" • 85th CT: {sprint_p85:.1f} days"
-                else:
-                    sprint_p85_text = ""
-
-                # Sprint header
-                label = f"{spr} — {compact.get(spr, '')}{sprint_p85_text}"
-
-                # EXPANDER BLOCK
-                with st.expander(label):
-                    spr_total = int(totals[totals["Sprint"] == spr]["Total"].iloc[0]) if spr in totals["Sprint"].values else 0
-                    st.caption(f"Total items: {spr_total}")
-
-                    # Filter sprint items and sort IssueTypes
-                    g = merged[merged["Sprint"] == spr].copy()
-                    g["order_key"] = g["IssueType"].map(ORDER).fillna(99)
-                    g = g.sort_values(["order_key", "IssueType"]).drop(columns=["order_key"])
-                    g["Percent"] = g["Percent"].round(1)
-
-                    # Compute per-IssueType P85 CT
+                for spr in sprint_order:
+                    sprint_items = expanded[expanded["Sprint"] == spr]
                     if not sprint_items.empty and "CT" in sprint_items.columns:
-                        p85_by_type = sprint_items.groupby("IssueType")["CT"].quantile(0.85)
+                        sprint_p85 = sprint_items["CT"].quantile(0.85)
+                        sprint_p85_text = f" • 85th CT: {sprint_p85:.1f} days"
                     else:
-                        p85_by_type = {}
+                        sprint_p85_text = ""
 
-                    # Add column for display
-                    g = g.copy()
-                    g["85th CT (days)"] = g["IssueType"].map(p85_by_type).round(2)
+                    label = f"{spr} — {compact.get(spr, '')}{sprint_p85_text}"
 
-                    # Summary table
-                    st.dataframe(
-                        g[["IssueType", "Count", "Percent", "85th CT (days)"]].reset_index(drop=True),
-                        use_container_width=True,
-                    )
+                    with st.expander(label):
+                        spr_total = int(totals[totals["Sprint"] == spr]["Total"].iloc[0]) if spr in totals["Sprint"].values else 0
+                        st.caption(f"Total items: {spr_total}")
 
-                    # ---- Items-by-IssueType drilldown ----
-                    st.markdown("**Items by Issue Type**")
+                        g = merged[merged["Sprint"] == spr].copy()
+                        g["order_key"] = g["IssueType"].map(ORDER).fillna(99)
+                        g = g.sort_values(["order_key", "IssueType"]).drop(columns=["order_key"])
+                        g["Percent"] = g["Percent"].round(1)
 
-                    has_key_col = "Key" in sprint_items.columns
-                    has_summary_col = "Summary" in sprint_items.columns
+                        if not sprint_items.empty and "CT" in sprint_items.columns:
+                            p85_by_type = sprint_items.groupby("IssueType")["CT"].quantile(0.85)
+                        else:
+                            p85_by_type = {}
 
-                    for itype in g["IssueType"].unique():
-                        sub_items = sprint_items[sprint_items["IssueType"] == itype].copy()
-                        if sub_items.empty:
-                            continue
+                        g["85th CT (days)"] = g["IssueType"].map(p85_by_type).round(2)
 
-                        title = f"{itype} ({len(sub_items)} items)"
-                        with st.expander(title):
-                            # Build columns in preferred order: Key, Summary, IssueType, CT, Start, End
-                            cols_to_show = []
+                        st.dataframe(
+                            g[["IssueType", "Count", "Percent", "85th CT (days)"]].reset_index(drop=True),
+                            use_container_width=True,
+                        )
 
-                            if has_key_col:
-                                cols_to_show.append("Key")
-                            if has_summary_col:
-                                cols_to_show.append("Summary")
+                        st.markdown("**Items by Issue Type**")
 
-                            for col in ["IssueType", "CT", "Start", "End"]:
-                                if col in sub_items.columns and col not in cols_to_show:
-                                    cols_to_show.append(col)
+                        has_key_col = "Key" in sprint_items.columns
+                        has_summary_col = "Summary" in sprint_items.columns
 
-                            if cols_to_show:
-                                st.dataframe(
-                                    sub_items[cols_to_show]
+                        for itype in g["IssueType"].unique():
+                            sub_items = sprint_items[sprint_items["IssueType"] == itype].copy()
+                            if sub_items.empty:
+                                continue
+
+                            title = f"{itype} ({len(sub_items)} items)"
+                            with st.expander(title):
+                                cols_to_show = []
+                                if has_key_col:
+                                    cols_to_show.append("Key")
+                                if has_summary_col:
+                                    cols_to_show.append("Summary")
+                                for col in ["IssueType", "CT", "Start", "End"]:
+                                    if col in sub_items.columns and col not in cols_to_show:
+                                        cols_to_show.append(col)
+
+                                if cols_to_show:
+                                    st.dataframe(
+                                        sub_items[cols_to_show]
                                         .sort_values("CT", ascending=False)
                                         .reset_index(drop=True),
-                                    use_container_width=True,
-                                )
-                            else:
-                                st.info("No item-level columns available to display for this sprint.")
+                                        use_container_width=True,
+                                    )
+                                else:
+                                    st.info("No item-level columns available to display for this sprint.")
+
 
 # ====================== CONTEXT / LEADERSHIP TAB ======================
 with tabs[5]:
