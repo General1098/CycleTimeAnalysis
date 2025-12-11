@@ -21,10 +21,10 @@ def fib_overlay_chart(dates, values, title="P85 Cycle Time with Fibonacci Bands"
     fig, ax = plt.subplots(figsize=(14, 4))
 
     # Shaded zones
-    ax.axhspan(fib_vals[2], fib_vals[0], color="#ffebee", alpha=1.0)   # red zone (worst)
-    ax.axhspan(fib_vals[3], fib_vals[2], color="#fff8e1", alpha=1.0)   # orange
-    ax.axhspan(fib_vals[4], fib_vals[3], color="#f1f8e9", alpha=1.0)   # yellow/green
-    ax.axhspan(fib_vals[-1], fib_vals[4], color="#e8f5e9", alpha=1.0)  # green (best)
+    ax.axhspan(fib_vals[2], fib_vals[0], color="#ffebee", alpha=1.0, edgecolor="#e57373", linewidth=0.5)
+    ax.axhspan(fib_vals[3], fib_vals[2], color="#fff3cd", alpha=1.0, edgecolor="#ffb74d", linewidth=0.5)
+    ax.axhspan(fib_vals[4], fib_vals[3], color="#e2f0cb", alpha=1.0, edgecolor="#aed581", linewidth=0.5)
+    ax.axhspan(fib_vals[-1], fib_vals[4], color="#c8e6c9", alpha=1.0, edgecolor="#81c784", linewidth=0.5)
 
     # Fibonacci dashed lines
     for lvl in fib_vals:
