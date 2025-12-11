@@ -379,9 +379,15 @@ with tabs[0]:
     
                 # --- Fibonacci override for P85 Monthly view ---
                 if use_fib_overlay and metric == "P85":
-                    df_plot = monthly.dropna(subset=["p85_ct"])
                 
-                    # Convert month values into real datetimes so Matplotlib can plot correctly
+                    # Aggregate monthly values properly (CRITICAL FIX)
+                    df_plot = (
+                        monthly.dropna(subset=["p85_ct"])
+                               .groupby("month", as_index=False)
+                               .agg({"p85_ct": "mean"})
+                    )
+                
+                    # Convert month values -> datetime
                     dates = [pd.to_datetime(str(m)) for m in df_plot["month"].tolist()]
                 
                     vals = df_plot["p85_ct"].tolist()
@@ -391,6 +397,7 @@ with tabs[0]:
                 
                 else:
                     st.altair_chart(chart.properties(height=380), use_container_width=True)
+
 
         else:
             rolling = ets["rolling"]
