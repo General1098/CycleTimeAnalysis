@@ -380,25 +380,24 @@ with tabs[0]:
                 # --- Fibonacci override for P85 Monthly view ---
                 if use_fib_overlay and metric == "P85":
                 
-                    # Build TRUE monthly dataset
-                    df_month = (
-                        ets['done']
+                    # Rebuild TRUE monthly aggregation from your existing monthly dataframe
+                    df_plot = (
+                        monthly
                         .dropna(subset=["p85_ct"])
-                        .assign(month=lambda d: d["completed"].dt.to_period("M").dt.to_timestamp())
                         .groupby("month", as_index=False)
                         .agg({"p85_ct": "mean"})
                         .sort_values("month")
                     )
                 
-                    dates = df_month["month"].tolist()
-                    vals = df_month["p85_ct"].tolist()
+                    # Convert months to timestamps Matplotlib can understand
+                    dates = [pd.to_datetime(str(m)) for m in df_plot["month"].tolist()]
+                    vals = df_plot["p85_ct"].tolist()
                 
                     fig = fib_overlay_chart(dates, vals, title=f"{selected_team} — P85 Fibonacci Trend")
                     st.pyplot(fig)
                 
                 else:
                     st.altair_chart(chart.properties(height=380), use_container_width=True)
-
 
 
         else:
