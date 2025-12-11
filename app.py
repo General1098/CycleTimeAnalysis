@@ -5,6 +5,46 @@ import altair as alt
 import sys, os
 import datetime
 
+# ---- Fibonacci Overlay Chart ----
+import matplotlib.pyplot as plt
+import numpy as np
+
+def fib_overlay_chart(dates, values, title="P85 Cycle Time with Fibonacci Bands"):
+    values = np.array(values, dtype=float)
+    low = np.nanmin(values)
+    high = np.nanmax(values)
+
+    # Fibonacci ratios (flipped: lower = better)
+    fib = np.array([1.0, 0.786, 0.618, 0.5, 0.382, 0.236, 0.0])
+    fib_vals = low + (high - low) * fib
+
+    fig, ax = plt.subplots(figsize=(14, 4))
+
+    # Shaded zones
+    ax.axhspan(fib_vals[2], fib_vals[0], color="#ffebee", alpha=0.35)   # red zone (worst)
+    ax.axhspan(fib_vals[3], fib_vals[2], color="#fff8e1", alpha=0.35)   # orange
+    ax.axhspan(fib_vals[4], fib_vals[3], color="#f1f8e9", alpha=0.35)   # yellow/green
+    ax.axhspan(fib_vals[-1], fib_vals[4], color="#e8f5e9", alpha=0.35)  # green (best)
+
+    # Fibonacci dashed lines
+    for lvl in fib_vals:
+        ax.axhline(lvl, linestyle="--", linewidth=0.7, color="gray")
+
+    # Main CT line
+    ax.plot(dates, values, marker="o", color="#00AEEF", linewidth=2)
+
+    ax.set_title(title)
+    ax.set_ylabel("P85 CT (days)")
+    ax.set_xticks(range(len(dates)))
+    ax.set_xticklabels(
+        [d.strftime("%b %d") if hasattr(d, "strftime") else str(d) for d in dates],
+        rotation=45
+    )
+
+    plt.tight_layout()
+    return fig
+
+
 # Ensure local imports work
 sys.path.append(os.path.dirname(__file__))
 
@@ -304,6 +344,9 @@ with tabs[0]:
         y_title = f"{metric} CT (days)"
     
         if eview == "Monthly":
+            if eview == "Monthly":
+                use_fib_overlay = st.checkbox("Show Fibonacci Performance Bands (P85 only)", value=False)
+
             monthly = ets["monthly"]
             if monthly.empty:
                 st.info("No completed items to plot.")
@@ -334,7 +377,17 @@ with tabs[0]:
                     labels = base.mark_text(dy=-18).encode(text="count:Q")
                     chart = (bars + line + labels)
     
-                st.altair_chart(chart.properties(height=380), use_container_width=True)
+                # --- Fibonacci override for P85 Monthly view ---
+                if use_fib_overlay and metric == "P85":
+                    df_plot = monthly.dropna(subset=["p85_ct"])
+                    dates = df_plot["month"].tolist()
+                    vals = df_plot["p85_ct"].tolist()
+                
+                    fig = fib_overlay_chart(dates, vals, title=f"{selected_team} — P85 Fibonacci Trend")
+                    st.pyplot(fig)
+                else:
+                    st.altair_chart(chart.properties(height=380), use_container_width=True)
+
         else:
             rolling = ets["rolling"]
             if rolling.empty:
