@@ -30,16 +30,19 @@ def fib_overlay_chart(dates, values, title="P85 Cycle Time with Fibonacci Bands"
     for lvl in fib_vals:
         ax.axhline(lvl, linestyle="--", linewidth=0.7, color="gray")
 
-    # Main CT line
-    ax.plot(dates, values, marker="o", color="#00AEEF", linewidth=2)
+    # ----- FIX STARTS HERE -----
+    # Use simple index positions for x, and dates only for labels
+    x = np.arange(len(dates))
+    ax.plot(x, values, marker="o", color="#00AEEF", linewidth=2)
 
     ax.set_title(title)
     ax.set_ylabel("P85 CT (days)")
-    ax.set_xticks(range(len(dates)))
+    ax.set_xticks(x)
     ax.set_xticklabels(
         [d.strftime("%b %d") if hasattr(d, "strftime") else str(d) for d in dates],
         rotation=45
     )
+    # ----- FIX ENDS HERE -----
 
     plt.tight_layout()
     return fig
