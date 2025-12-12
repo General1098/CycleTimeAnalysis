@@ -10,11 +10,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def fib_overlay_chart(dates, values, title="P85 Cycle Time with Fibonacci Bands"):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
     values = np.array(values, dtype=float)
+
+    # --- Fibonacci bands ---
     low = np.nanmin(values)
     high = np.nanmax(values)
 
-    # Fibonacci ratios (flipped: lower = better)
     fib = np.array([1.0, 0.786, 0.618, 0.5, 0.382, 0.236, 0.0])
     fib_vals = low + (high - low) * fib
 
@@ -26,27 +31,37 @@ def fib_overlay_chart(dates, values, title="P85 Cycle Time with Fibonacci Bands"
     ax.axhspan(fib_vals[4], fib_vals[3], color="#fff3cd", alpha=1.0, edgecolor="#ffb74d", linewidth=0.5)
     ax.axhspan(fib_vals[-1], fib_vals[4], color="#c8e6c9", alpha=1.0, edgecolor="#81c784", linewidth=0.5)
 
-    # Fibonacci dashed lines
     for lvl in fib_vals:
-        ax.axhline(lvl, linestyle="--", linewidth=0.7, color="gray")
+        ax.axhline(lvl, linestyle="--", linewidth=0.6, color="gray", alpha=0.7)
 
-    # ----- FIX STARTS HERE -----
-    # Use simple index positions for x, and dates only for labels
-    x = np.arange(len(dates))
-    ax.plot(x, values, marker="o", color="#00AEEF", linewidth=2)
+    # --- Main P85 line ---
+    ax.plot(dates, values, marker="o", linewidth=2.2, color="#42a5f5", label="P85")
+
+    # --- REGRESSION TREND LINE (this is the important bit) ---
+    x = mdates.date2num(dates)
+    mask = ~np.isnan(values)
+
+    if mask.sum() > 1:
+        coef = np.polyfit(x[mask], values[mask], 1)
+        trend = np.poly1d(coef)
+        ax.plot(
+            dates,
+            trend(x),
+            color="#e53935",
+            linewidth=2.8,
+            linestyle="-",
+            label="Trend"
+        )
 
     ax.set_title(title)
     ax.set_ylabel("P85 CT (days)")
-    ax.set_xticks(x)
-    ax.set_xticklabels(
-        [d.strftime("%b %d") if hasattr(d, "strftime") else str(d) for d in dates],
-        rotation=45
-    )
-    # ----- FIX ENDS HERE -----
+    ax.legend(loc="upper left")
+
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    fig.autofmt_xdate()
 
     plt.tight_layout()
     return fig
-
 
 # Ensure local imports work
 sys.path.append(os.path.dirname(__file__))
