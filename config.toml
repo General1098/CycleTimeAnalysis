@@ -1,0 +1,7 @@
+[theme]
+base = "dark"
+primaryColor = "#22D3EE"          # neon cyan
+backgroundColor = "#0B0F17"       # near-black
+secondaryBackgroundColor = "#111827"  # card surface
+textColor = "#E5E7EB"
+font = "sans serif"
