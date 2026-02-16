@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+altair
+requests
+matplotlib
+vl-convert-python
+streamlit-cookies-manager
+psycopg2-binary
